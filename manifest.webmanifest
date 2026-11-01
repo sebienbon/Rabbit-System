@@ -1,0 +1,9 @@
+{
+  "name": "Rabbit Tree Reception",
+  "short_name": "Reception",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#F3F6F9",
+  "theme_color": "#1769C2",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
