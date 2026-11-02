@@ -97,7 +97,7 @@ export function applyOps(lines, ops) {
 }
 
 /** Operations not yet in the last copy pulled from the sheet: those already sent, then those waiting. */
-async function newerOps() {
+export async function newerOps() {
   const [linesV, applied, outbox] = await Promise.all([db.get('linesV'), db.all('applied'), db.all('outbox')]);
   const v = linesV || 0;
   return [

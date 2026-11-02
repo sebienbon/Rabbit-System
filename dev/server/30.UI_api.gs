@@ -272,7 +272,8 @@ var UIAPI = (function () {
       lines: readLines_(),
       cashbox: readCashbox_(),
       partners: readPartners_(),
-      settlement: lastSettlement_()
+      settlement: lastSettlement_(),
+      bar: readBarCashouts_() // TEMPORARY (bar cash-out): remove with the BAR CASH-OUT block below
     };
     if (sess.reg) {
       // Hashes let the registered reception computer check passwords during an outage.
@@ -722,6 +723,25 @@ var UIAPI = (function () {
     });
     return Math.round(total);
   }
+
+  // ====================== BAR CASH-OUT (TEMPORARY) ======================
+  // The bar has its own cash. At the end of the day the desk records the bar cash-out as the
+  // old sheet did, in Entries Manual only (never in Entries, never in the reception box):
+  // A date, B "BAR Cash-out", H amount, N "Extern cash", O author, P comment, Q time stamp.
+  // To remove later: delete this block, the bar_cashout handler, `bar:` in pull, js/bar.js
+  // and its line in js/work.js.
+  var BAR_TYPE = 'BAR Cash-out', BAR_DAYS = 14;
+  function readBarCashouts_() {
+    var s = ss_().getSheetByName(SHEETS.manual);
+    if (!s) return [];
+    var last = lastRowIn_(s, 1, 3);
+    if (last < 2) return [];
+    var from = tsOf_(new Date(Date.now() - BAR_DAYS * 86400000));
+    return s.getRange(2, 1, last - 1, 17).getValues().filter(function (r) {
+      return String(r[1]) === BAR_TYPE && String(r[16]) >= from;
+    }).map(function (r) { return { ts: String(r[16]), amount: num_(r[7]), author: String(r[14]), comment: String(r[15]) }; });
+  }
+  // ======================================================================
 
   // ---------- push ----------
   // Each handler: validate everything first, then write. Re-running it for the same
@@ -1229,6 +1249,24 @@ var UIAPI = (function () {
           row.map(function (v, i) { return '<td>' + htmlEsc_(i === 0 ? fmt_(at, 'dd/MM/yyyy') : v) + '</td>'; }).join('') + '</tr></table><p>This is an automated email.</p>' }));
       warn = warn.filter(String).join(' ');
       return { difference: diff, cardTotal: card, net: net, warning: warn || undefined, already: mine > 0 || undefined };
+    },
+    /** TEMPORARY (bar cash-out): one Entries Manual row, like the old sheet. */
+    bar_cashout: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var ts = lineTs_(p.ts, at);
+      var amount = amount_(p.amount, 'amount');
+      if (amount <= 0) throw apiError_('bad_amount', 'Invalid amount');
+      var comment = text_(p.comment, 300, 'Comment');
+      assertCashRight_(me);
+      var man = manual_();
+      if (man.byTs[ts]) return { already: true };
+      var row = [dateOnly_(at), BAR_TYPE, '', '', '', '', '', amount, '', '', '', '', '', 'Extern cash', me.author || me.username, comment, ts];
+      var r = man.last + 1;
+      man.sheet.getRange(r, 17).setNumberFormat('@');
+      man.sheet.getRange(r, 1, 1, 17).setValues([row]);
+      man.sheet.getRange(r, 1).setNumberFormat('dd/MM/yyyy');
+      return {};
     },
     shift_open: function (op, me) {
       var p = op.payload || {};

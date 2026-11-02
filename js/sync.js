@@ -124,6 +124,7 @@ async function doPull() {
       ['kv', 'put', r.cashbox || [], 'cashbox'],
       ['kv', 'put', r.partners || { items: [], lines: [] }, 'partners'],
       ['kv', 'put', r.settlement || null, 'settlement'],
+      ['kv', 'put', r.bar || [], 'bar'], // TEMPORARY (bar cash-out)
       ['kv', 'put', v, 'linesV'],
       // Already in this copy, or older than two days (safety net if the version ever jumps).
       ...applied.filter(a => a.v <= v || Date.now() - new Date(a.op.at).getTime() > 2 * 86400000).map(a => ['applied', 'delete', a.id]),

@@ -695,3 +695,19 @@ test('review: a solve reusing the phantom\'s own id is refused; a phantom whose 
   assert.strictEqual(cashRows(env).find(r => String(r[7]).includes(p1.payload.pid))[8], 'Phantom');
   assert.strictEqual(cashRows(env).filter(r => r[8] === 'Phantom Salvation').length, 0);
 });
+
+test('TEMPORARY bar cash-out: one Entries Manual row like the old sheet, not in Entries, not in the box', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  const b = op('bar_cashout', { ts: newTs(), amount: 600000, comment: '' });
+  assert.strictEqual(push(env, ayu, b).results[0].error, 'forbidden');
+  const id = openShift(env, ayu);
+  const b2 = op('bar_cashout', { ts: newTs(), amount: 600000, comment: 'night' });
+  assert.strictEqual(push(env, ayu, b2).results[0].status, 'applied');
+  const m = findM(env, b2.payload.ts);
+  assert.deepStrictEqual([m[1], m[7], m[13], m[14], m[15], m[16]], ['BAR Cash-out', 600000, 'Extern cash', 'r1@x', 'night', b2.payload.ts]);
+  assert.ok(!findE(env, b2.payload.ts), 'not in Entries');
+  assert.strictEqual(env.call({ action: 'pull', token: ayu }).bar[0].amount, 600000);
+  const c = push(env, ayu, op('shift_close', { shiftId: id, cashCounted: 100000, expectedCash: 100000 }));
+  assert.strictEqual(c.results[0].difference, 0, 'the reception box is unchanged');
+});

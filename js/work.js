@@ -2,6 +2,7 @@ import { db } from './db.js';
 import { enqueue } from './sync.js';
 import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash, partnerView, billNet, tsFromMs, lastSettlementView, cardLines, cardAmount } from './ledger.js';
 import { money, parseMoney } from './shift.js';
+import { renderBar } from './bar.js'; // TEMPORARY (bar cash-out)
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
 // Everything is written locally first (instant, works offline), then sent.
@@ -67,6 +68,7 @@ export async function renderWork(root, ctx) {
   else if (tab === 'cash') await renderCash(root, d);
   else if (tab === 'partners') await renderPartners(root, d);
   else if (tab === 'card') await renderCard(root, d);
+  else if (tab === 'bar') await renderBar(root, d); // TEMPORARY (bar cash-out)
 }
 
 // ---------------------------------------------------------------- sell
