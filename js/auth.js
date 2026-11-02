@@ -48,11 +48,43 @@ export async function login(username, password, { register = false } = {}) {
     if (!u) throw new ApiError('offline_unknown', 'No connection, and this user is not known on this computer yet.');
     const h = await hashPassword(password, u.salt, u.rounds || 2000);
     if (h !== u.hash) throw new ApiError('bad_login', 'Wrong username or password');
-    const user = { username: u.username, name: u.name, role: u.role, mode: 'offline' };
+    const user = { username: u.username, name: u.name, role: u.role, author: u.author || u.username, mode: 'offline' };
     await db.set('currentUser', user);
+    pendingOnline = { username, password };
     return user;
   }
 }
 
-export async function logout() { await db.del('currentUser'); }
+// Password of the person logged in offline, kept in memory only, to get a session
+// from the sheet as soon as the connection is back (never written anywhere).
+let pendingOnline = null;
+
+/** Called by the sync when there is no session on this computer. */
+export async function reconnect() {
+  if (!pendingOnline) return null;
+  try {
+    const r = await api('login', { username: pendingOnline.username, password: pendingOnline.password, deviceId: await deviceId(),
+      deviceSecret: (await db.get('deviceSecret')) || undefined });
+    pendingOnline = null;
+    await db.set('deviceToken', r.token);
+    return r.token;
+  } catch (e) {
+    if (!(e instanceof ApiError && e.network)) pendingOnline = null;
+    return null;
+  }
+}
+
+/**
+ * A manager leaving the desk: the session that carries manager rights is revoked and
+ * forgotten by this computer (call after sending what is waiting).
+ */
+export async function logout(user) {
+  pendingOnline = null;
+  if (user && user.role !== 'staff') {
+    const token = await db.get('deviceToken');
+    await db.del('deviceToken');
+    if (token) api('logout', { token }, 8000).catch(() => {});
+  }
+  await db.del('currentUser');
+}
 export const currentUser = () => db.get('currentUser');

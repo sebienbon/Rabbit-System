@@ -1,8 +1,8 @@
 // Tiny promise wrapper around IndexedDB. Everything the interface knows lives here,
 // so it keeps working during an Internet outage and survives a browser restart.
 const DB_NAME = 'rabbit-reception';
-const DB_VERSION = 1;
-const STORES = ['kv', 'outbox', 'shifts', 'rejected'];
+const DB_VERSION = 2;
+const STORES = ['kv', 'outbox', 'shifts', 'rejected', 'applied'];
 
 let dbPromise;
 function open() {
@@ -15,6 +15,8 @@ function open() {
         if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'seq', autoIncrement: true });
         if (!db.objectStoreNames.contains('shifts')) db.createObjectStore('shifts', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('rejected')) db.createObjectStore('rejected', { keyPath: 'id' });
+        // Operations the sheet accepted but that are not yet in the last copy of the lines.
+        if (!db.objectStoreNames.contains('applied')) db.createObjectStore('applied', { keyPath: 'id' });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);

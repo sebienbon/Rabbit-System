@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import { api, ApiError } from './api.js';
 import { CONFIG } from './config.js';
-import { deviceId } from './auth.js';
+import { deviceId, reconnect } from './auth.js';
 
 // Everything the receptionist does becomes an "operation" stored locally first
 // (instant, works offline), then sent to the spreadsheet in the background.
@@ -32,7 +32,7 @@ export async function enqueue(type, payload) {
   const dev = await deviceId();
   const op = {
     id: `${dev}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`,
-    type, at: new Date().toISOString(), by: user.username, payload,
+    type, at: new Date().toISOString(), by: user.username, author: user.author || user.username, payload,
   };
   await db.put('outbox', op);
   await refreshCounts();
@@ -68,7 +68,8 @@ const asApiError = e => e instanceof ApiError ? e : new ApiError('error', String
 async function doPush() {
   const outbox = (await db.all('outbox')).sort((a, b) => a.seq - b.seq);
   if (!outbox.length) { if (status.state === 'sending') emit({ state: 'idle' }); return; }
-  const token = await db.get('deviceToken');
+  let token = await db.get('deviceToken');
+  if (!token) token = await reconnect();
   if (!token) { emit({ state: 'expired', message: 'Log in while connected to send the waiting operations.' }); return; }
   emit({ state: 'sending' });
   try {
@@ -80,6 +81,7 @@ async function doPush() {
       const o = byId.get(res.id);
       if (!o) continue;
       writes.push(['outbox', 'delete', o.seq]);
+      if (res.status !== 'rejected') writes.push(['applied', 'put', { id: o.id, seq: o.seq, v: (r.shift && r.shift.v) || 0, op: o }]);
       if (res.status === 'rejected') {
         writes.push(['rejected', 'put', { ...o, error: res.error, message: res.message, rejectedAt: new Date().toISOString() }]);
       }
@@ -103,18 +105,29 @@ async function doPush() {
 }
 
 async function doPull() {
-  const token = await db.get('deviceToken');
+  const token = (await db.get('deviceToken')) || await reconnect();
   if (!token) return;
   try {
     const r = await api('pull', { token });
+    const v = (r.shift && r.shift.v) || 0;
+    const applied = await db.all('applied');
     const writes = [
       ['kv', 'put', r.catalog, 'catalog'],
+      ['kv', 'put', r.payments, 'payments'],
       ['kv', 'put', r.guests, 'guests'],
+      ['kv', 'put', r.lines || [], 'lines'],
+      ['kv', 'put', v, 'linesV'],
+      // Already in this copy, or older than two days (safety net if the version ever jumps).
+      ...applied.filter(a => a.v <= v || Date.now() - new Date(a.op.at).getTime() > 2 * 86400000).map(a => ['applied', 'delete', a.id]),
       ['kv', 'put', r.serverTime, 'lastPull'],
       ['kv', 'put', new Date().toISOString(), 'lastSync'],
       ...await shiftWrite(r.shift),
     ];
     writes.push(r.users ? ['kv', 'put', r.users, 'users'] : ['kv', 'delete', 'users']);
+    if (r.me) {
+      const cur = await db.get('currentUser');
+      if (cur && cur.username === r.me.username) writes.push(['kv', 'put', { ...cur, ...r.me }, 'currentUser']);
+    }
     await db.batch(writes);
     nextPullAt = Date.now() + CONFIG.PULL_EVERY_MS;
     if (status.state === 'offline' || status.state === 'error') failures = 0;

@@ -46,7 +46,9 @@ test('pull requires a session and returns catalog, guests, users, shift', () => 
   const { token } = login(env, 'ayu', 'pw-ayu');
   const p = env.call({ action: 'pull', token });
   assert.ok(p.ok);
-  assert.deepStrictEqual(p.catalog, [{ name: 'Towel', price: 50000 }, { name: 'Laundry', price: 30000 }]);
+  assert.deepStrictEqual(p.catalog, [], 'no Service/Transport/Tour columns in this small sheet');
+  assert.deepStrictEqual(p.payments, ['Unpaid']);
+  assert.deepStrictEqual(p.lines, []);
   assert.deepStrictEqual(p.guests, ['Alice Example', 'Bob Sample']);
   assert.strictEqual(p.users, undefined, 'unregistered device gets no password hashes');
   assert.strictEqual(p.shift.open, false);
@@ -113,7 +115,9 @@ test('business rules: no double open, only owner or manager closes, bad amounts 
   assert.strictEqual(r.results[0].error, 'bad_amount');
   r = env.call({ action: 'push', token: boss, ops: [op('shift_close', { shiftId: 'B1', cashCounted: '1.250.000', expectedCash: 1250000 })] });
   assert.strictEqual(r.results[0].status, 'applied');
-  assert.strictEqual(r.results[0].difference, 0, 'thousand separators understood');
+  assert.strictEqual(r.results[0].difference, 1250000 - 100, 'thousand separators understood; expected cash = opening 100 (no sales)');
+  assert.strictEqual(r.results[0].expected, 100);
+  assert.match(env.book['UI_Shifts'].data.find(x => x[0] === 'B1')[12], /screen expected 1250000, sheet 100/);
   // Manager closing another user's shift is allowed; staff closing their own is too.
   env.call({ action: 'push', token: ayu, ops: [op('shift_open', { shiftId: 'A2', cashCounted: 0 })] });
   r = env.call({ action: 'push', token: boss, ops: [op('shift_close', { shiftId: 'A2', cashCounted: 0, expectedCash: 0 })] });
@@ -145,8 +149,9 @@ test('offline login: colleague ops accepted only from the registered computer', 
   const reg = login(env, 'boss', 'pw-boss', { registerDevice: true });
   assert.ok(reg.registered && reg.deviceSecret);
   const p = env.call({ action: 'pull', token: reg.token });
+  assert.ok(p.users, JSON.stringify(p));
   assert.strictEqual(p.users.length, 2, 'registered device gets hashes for offline login');
-  assert.ok(p.users.every(u => u.hash && u.salt && !('author' in u)));
+  assert.ok(p.users.every(u => u.hash && u.salt && u.author));
   assert.strictEqual(login(env, 'ayu', 'pw-ayu', { deviceSecret: 'wrong' }).registered, false);
   const { token } = login(env, 'ayu', 'pw-ayu', { deviceSecret: reg.deviceSecret });
   const o = { ...op('shift_open', { shiftId: 'X1', cashCounted: 5 }), by: 'boss' };

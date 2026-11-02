@@ -3,14 +3,20 @@ import { CONFIG } from './config.js';
 import { login, logout, currentUser, isRegistered } from './auth.js';
 import { startSync, onStatus, pushNow, pullNow, dismissRejected } from './sync.js';
 import { currentShift, cashInBoxBeforeOpening, expectedCash, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
+import { renderWork, workTabs, cartBusy } from './work.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const time = iso => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
 const dayTime = iso => iso ? new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 
-const ui = { user: null, pickedUser: null, typedUser: false, closing: null, notice: null, busy: false };
+const ui = { user: null, pickedUser: null, typedUser: false, closing: null, notice: null, busy: false, tab: 'sell' };
 const main = () => $('#main');
+let noticeShown = null; // { text, until }
+function currentNotice() {
+  if (ui.notice) { noticeShown = { text: ui.notice, until: Date.now() + 8000 }; ui.notice = null; setTimeout(() => { if (noticeShown && noticeShown.until <= Date.now()) main().querySelector('.notice')?.remove(); }, 8100); }
+  return noticeShown && noticeShown.until > Date.now() ? noticeShown.text : null;
+}
 
 // ---------- sync strip ----------
 function renderStrip(s) {
@@ -114,8 +120,8 @@ async function renderShift() {
   const rejected = await db.all('rejected');
   let html = '';
 
-  if (ui.notice) html += `<div class="notice" role="status">${esc(ui.notice)}</div>`;
-  ui.notice = null;
+  const note = currentNotice();
+  if (note) html += `<div class="notice" role="status">${esc(note)}</div>`;
 
   if (!shift) {
     const ref = await cashInBoxBeforeOpening();
@@ -154,20 +160,34 @@ async function renderShift() {
 
   const mine = shift.user === ui.user.username;
   const expected = await expectedCash(shift);
+  const wt = await workTabs({ ui, user: ui.user, shift });
+  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
   html += `<section class="card shift">
     <div class="shifthead">
-      <h2>${mine ? 'Your shift is open' : `${esc(shift.userName && shift.userName !== shift.user ? shift.userName : nameOf(shift.user))}'s shift is open`}</h2>
+      <h2>${mine ? 'Your shift' : `${esc(shift.userName && shift.userName !== shift.user ? shift.userName : nameOf(shift.user))}'s shift`}</h2>
       <span class="since">since ${esc(dayTime(shift.openedAt))}</span>
     </div>
-    <dl class="figures">
-      <div><dt>Opening cash</dt><dd class="num">Rp ${money(shift.openingCash)}</dd></div>
-      <div><dt>Cash sales and expenses</dt><dd class="num muted">Rp ${money(expected - shift.openingCash)}</dd></div>
+    <dl class="figures row4">
+      <div><dt>Opening cash</dt><dd class="num">${money(shift.openingCash)}</dd></div>
+      <div><dt>Cash in</dt><dd class="num">${money(wt.totals.cashIn)}</dd></div>
+      <div><dt>Cash paid out</dt><dd class="num">${money(wt.totals.cashOut)}</dd></div>
       <div class="total"><dt>Should be in the box</dt><dd class="num">Rp ${money(expected)}</dd></div>
-    </dl></section>`;
+    </dl>
+    <nav class="tabs" role="tablist">${tabs.map(([k, label, n]) => `<button type="button" role="tab" aria-selected="${ui.tab === k}" data-tab="${k}">${label}${n ? `<span class="count">${n}</span>` : ''}</button>`).join('')}</nav>
+  </section>`;
+
+  if (ui.tab !== 'close') {
+    main().innerHTML = html + '<div id="work"></div>' + attention(rejected);
+    bindTabs();
+    await renderWork($('#work'), { ui, user: ui.user, shift, render });
+    bindAttention();
+    return;
+  }
 
   if (!canClose(ui.user, shift)) {
     html += `<section class="card"><p>Only ${esc(nameOf(shift.user))} or a manager can close this shift.</p></section>`;
     main().innerHTML = html + attention(rejected);
+    bindTabs();
     bindAttention();
     return;
   }
@@ -185,12 +205,13 @@ async function renderShift() {
       <div class="row"><button class="primary" id="confirmClose">Close shift</button><button class="ghost" id="cancelClose">Change the numbers</button></div>
     </section>`;
     main().innerHTML = html + attention(rejected);
+    bindTabs();
     $('#cancelClose').onclick = () => { ui.closing = null; render(); };
     $('#confirmClose').onclick = async () => {
       $('#confirmClose').disabled = true;
       try {
         const closed = await closeShift(ui.user, shift, c);
-        ui.closing = null;
+        ui.closing = null; ui.tab = 'sell';
         ui.notice = `Shift closed. ${diffText(closed.difference)}.`;
         render();
       } catch (err) { showError($('.confirm'), err); $('#confirmClose').disabled = false; }
@@ -209,6 +230,7 @@ async function renderShift() {
       <button class="primary" type="submit">Review and close</button>
     </form></section>`;
   main().innerHTML = html + attention(rejected);
+  bindTabs();
   const f = $('#closeForm');
   const calc = () => {
     const v = parseMoney($('#cash').value), out = parseMoney($('#cashout').value) || 0, d = $('#diff');
@@ -228,6 +250,13 @@ async function renderShift() {
   bindAttention();
 }
 
+function bindTabs() {
+  main().querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
+    ui.tab = b.dataset.tab; ui.closing = null; ui.editing = ui.deleting = ui.refunding = null;
+    render();
+  });
+}
+
 function showError(root, err) {
   let p = root.querySelector('.error');
   if (!p) { p = document.createElement('p'); p.className = 'error'; p.setAttribute('role', 'alert'); root.appendChild(p); }
@@ -236,11 +265,16 @@ function showError(root, err) {
 
 function attention(rejected) {
   if (!rejected.length) return '';
-  const label = { shift_open: 'Open shift', shift_close: 'Close shift' };
+  const label = { shift_open: 'Open shift', shift_close: 'Close shift', sale: 'Sale', line_update: 'Change', line_delete: 'Delete', settle: 'Bill payment', refund: 'Refund' };
+  const what = r => {
+    const p = r.payload || {};
+    if (r.type === 'sale') return (p.lines || []).map(l => `${l.object.replace(/^-/, '')} for ${l.guest}`).slice(0, 3).join(', ') + ` (${p.payment})`;
+    return '';
+  };
   return `<section class="card attention" id="attention">
     <h2>Refused by the sheet</h2>
     <p class="muted">These were saved here but the sheet did not accept them. Tell a manager, then dismiss.</p>
-    <ul>${rejected.map(r => `<li><div><b>${esc(label[r.type] || r.type)}</b> by ${esc(r.by)}, ${esc(dayTime(r.at))}<br><span class="why">${esc(r.message || r.error)}</span></div>
+    <ul>${rejected.map(r => `<li><div><b>${esc(label[r.type] || r.type)}</b> by ${esc(r.by)}, ${esc(dayTime(r.at))}${what(r) ? `<br>${esc(what(r))}` : ''}<br><span class="why">${esc(r.message || r.error)}</span></div>
       <button class="ghost small" data-dismiss="${esc(r.id)}">Dismiss</button></li>`).join('')}</ul></section>`;
 }
 function bindAttention() {
@@ -248,20 +282,48 @@ function bindAttention() {
 }
 
 // ---------- shell ----------
-async function render() {
+let rendering = null, renderAgain = false;
+function render() {
+  if (rendering) { renderAgain = true; return rendering; }
+  rendering = (async () => {
+    do { renderAgain = false; await renderNow(); } while (renderAgain);
+  })().catch(e => console.error(e)).finally(() => { rendering = null; });
+  return rendering;
+}
+async function renderNow() {
   if (!ui.user) { await renderLogin(); return; }
   $('#who').innerHTML = `<span>${esc(ui.user.name)}${ui.user.role !== 'staff' ? ` <em>${esc(ui.user.role)}</em>` : ''}</span>
     <button class="ghost small" id="logout">Log out</button>`;
-  $('#logout').onclick = async () => { await logout(); ui.user = null; ui.closing = null; render(); };
+  $('#logout').onclick = async () => {
+    $('#logout').disabled = true;
+    if (ui.user.role !== 'staff') await pushNow(); // send what is waiting before the manager session goes
+    await logout(ui.user); ui.user = null; ui.closing = null; ui.cart = null; ui.tab = 'sell'; ui.billGuest = null; noticeShown = null; render(); };
+  const shiftOpen = !!(await currentShift());
+  main().classList.toggle('wide', shiftOpen);
   await renderShift();
 }
 
 // Refresh the screen after a sync, unless the person is halfway through typing.
 async function afterSync() {
   await reconcile();
-  if (!ui.user || ui.closing) return;
-  const typing = [...document.querySelectorAll('main form input:not([type=hidden])')].some(i => i.value !== '');
-  if (!typing) render();
+  if (!ui.user || ui.closing || ui.editing || ui.refunding || ui.deleting) return;
+  const active = document.activeElement;
+  const typing = (active && active.matches && active.matches('main input, main select, main textarea')) ||
+    [...document.querySelectorAll('main form input:not([type=hidden]):not([type=checkbox]):not([type=search])')].some(i => i.value !== '');
+  if (typing || cartBusy(ui) || (ui.tab === 'bills' && ui.billGuest)) { refreshFigures(); return; }
+  render();
+}
+/** Only the numbers at the top, when a full refresh would disturb someone mid-task. */
+async function refreshFigures() {
+  const shift = await currentShift();
+  if (!shift) return;
+  const wt = await workTabs({ ui, user: ui.user, shift });
+  const fig = main().querySelectorAll('.figures.row4 dd');
+  if (fig.length === 4) {
+    fig[1].textContent = money(wt.totals.cashIn);
+    fig[2].textContent = money(wt.totals.cashOut);
+    fig[3].textContent = `Rp ${money(await expectedCash(shift))}`;
+  }
 }
 
 async function boot() {
@@ -278,7 +340,7 @@ async function boot() {
       if (!hadController) return;
       const reloadWhenIdle = () => {
         const typing = [...document.querySelectorAll('main form input:not([type=hidden])')].some(i => i.value !== '');
-        if (typing || ui.closing) setTimeout(reloadWhenIdle, 10000); else location.reload();
+        if (typing || ui.closing || cartBusy(ui) || ui.editing || ui.refunding) setTimeout(reloadWhenIdle, 10000); else location.reload();
       };
       reloadWhenIdle();
     });

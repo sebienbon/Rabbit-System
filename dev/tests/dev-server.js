@@ -11,7 +11,20 @@ function seedEnv() {
     'Cashouts&Cor': [['Column 1', 'Time ', 'Cashout', 'Difference', 'Cash in box', 'Change suply', 'Author', 'Comment', 'Type'],
       ['01/11/2026', '15:00:08', 0, 0, 1387750, '', 'r1@x', '', 'Closing']],
     'Entries Manual': manual,
-    'Data activities': [['Activity', 'Selling Price'], ['Towel', '50,000Rp']],
+    'Data activities': [
+      ['Activity', 'Selling Price', 'Purchase prices', '', '', '', '', '', 'Category', 'Sub-category - Income', 'Staff', 'Service', 'Transport', 'Tour', 'Other', 'Paid', 'Payment type'],
+      ['Towel', '50,000Rp', '', '', '', '', '', '', '', '', '', 'Towel', '-Shuttle Bangsal / Kuta', '-Horse Riding', '', '', 'Cash'],
+      ['Laundry', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Laundry', '', '-Snorkeling Trip', '', '', 'Credit / Debit Card'],
+      ['Bar', '', '', '', '', '', '', '', '', '', '', 'Bar', '', '', '', '', 'Transfer/Others'],
+      ['-Horse Riding', '400,000Rp', '350,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Unpaid'],
+      ['-Shuttle Bangsal / Kuta', '160,000Rp', '90,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Paid to Partner'],
+      ['-Snorkeling Trip', '150,000Rp', '100,000Rp'],
+    ],
+    'Entries': [
+      ['Date', 'Category', 'Sub-category', 'object', 'Qty', 'Auto price per unit', 'Auto price', 'Real price (if different)', 'Author', 'Theorical cost per unit', 'Theorical cost', 'Real cost (if different)', 'Guest', 'Payment Type', 'Time stamp', 'month correction', 'Comment'],
+      [new Date(Date.now() - 3 * 86400000), 'Income', 'Service', 'Laundry', 2, 30000, 60000, 60000, 'r2@x', '', 0, 0, 'Alice Example', 'Unpaid',
+        new Date(Date.now() - 3 * 86400000 + 8 * 3600000).toISOString().replace(/\D/g, '').slice(0, 17), '', ''],
+    ],
     '24datafeed': [['Guest Name', 'First Name', 'Full'], ['E', 'A', 'Alice Example']],
     'New guest': [['', '', '', '', '', 'Bob Sample']],
   } });

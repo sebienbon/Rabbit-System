@@ -70,6 +70,7 @@ const step = (m) => console.log('  ✓ ' + m);
 
     // ---- outage ----
     srv.setDown(true);
+    await page.click('[data-tab="close"]');
     await page.fill('#cash', '1000000');
     await page.fill('#cashout', '387000');
     assert.match(await page.textContent('#diff'), /Exact/);
@@ -98,7 +99,7 @@ const step = (m) => console.log('  ✓ ' + m);
     await ctx.setOffline(true);
     await page.reload();
     await page.waitForSelector('.shift');
-    assert.match(await page.textContent('.shift h2'), /Your shift is open/);
+    assert.match(await page.textContent('.shift h2'), /Your shift/);
     await shot('07-reload-offline');
     step('page reloads with no network at all and keeps its state');
 
@@ -126,7 +127,7 @@ const step = (m) => console.log('  ✓ ' + m);
     await page.click('#logout');
     await page.click('[data-user="boss"]'); await page.fill('#p', 'boss123'); await page.click('button.primary');
     await page.waitForSelector('.shift');
-    assert.match(await page.textContent('.shift h2'), /Dewa's shift is open/);
+    assert.match(await page.textContent('.shift h2'), /Dewa's shift/);
     step('manager sees the colleague\'s open shift and can close it');
 
     // Manager closes Dewa's shift from another computer (not registered, online only).
@@ -135,6 +136,7 @@ const step = (m) => console.log('  ✓ ' + m);
     await p2.goto(base);
     await p2.waitForSelector('#u');
     await p2.fill('#u', 'boss'); await p2.fill('#p', 'boss123'); await p2.click('button.primary');
+    await p2.click('[data-tab="close"]');
     await p2.waitForSelector('#closeForm');
     await p2.fill('#cash', '1000000'); await p2.click('#closeForm button.primary');
     await p2.click('#confirmClose');

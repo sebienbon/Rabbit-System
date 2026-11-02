@@ -44,10 +44,13 @@ class Sheet {
     if (typeof a === 'string') {
       const m = a.match(/^([A-Z]+):([A-Z]+)$/);
       if (m) return new Range(this, 1, colToNum(m[1]), 1000, colToNum(m[2]) - colToNum(m[1]) + 1);
+      const m2 = a.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+      if (m2) return new Range(this, +m2[2], colToNum(m2[1]), +m2[4] - +m2[2] + 1, colToNum(m2[3]) - colToNum(m2[1]) + 1);
       throw new Error('A1 notation not supported in shim: ' + a);
     }
     return new Range(this, a, b, c || 1, d || 1);
   }
+  deleteRow(r) { this.maybeFail('deleteRow'); this.data.splice(r - 1, 1); }
   appendRow(row) { this.maybeFail('appendRow'); const r = this.getLastRow() + 1; row.forEach((v, j) => this.set(r, j + 1, v)); return this; }
   setFrozenRows() { return this; }
 }

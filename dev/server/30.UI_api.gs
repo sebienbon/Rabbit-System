@@ -30,6 +30,7 @@ var UIAPI = (function () {
     shifts: 'UI_Shifts',
     cash: 'Cashouts&Cor',
     manual: 'Entries Manual',
+    entries: 'Entries',
     catalog: 'Data activities',
     feed: '24datafeed',
     newGuest: 'New guest'
@@ -207,6 +208,10 @@ var UIAPI = (function () {
     if (newSecret) out.deviceSecret = newSecret;
     return out;
   }
+  function logout(body) {
+    if (body.token) PropertiesService.getScriptProperties().deleteProperty('UIS_' + body.token);
+    return {};
+  }
   function purgeSessions_(props) {
     var all = props.getProperties(), now = Date.now();
     Object.keys(all).forEach(function (k) {
@@ -244,9 +249,11 @@ var UIAPI = (function () {
     }
     var u = findUser_(by);
     if (!u || !u.active) throw apiError_('forbidden', 'Unknown or disabled user ' + by);
-    return { user: u, via: 'offline-login on device' };
+    // Checked only by the computer itself: never more than staff rights.
+    var asStaff = {}; Object.keys(u).forEach(function (k) { asStaff[k] = u[k]; }); asStaff.role = 'staff';
+    return { user: asStaff, via: 'offline-login on device' };
   }
-  function publicUser_(u) { return { username: u.username, name: u.name, role: u.role }; }
+  function publicUser_(u) { return { username: u.username, name: u.name, role: u.role, author: u.author || u.username }; }
 
   // ---------- pull ----------
   function pull(body) {
@@ -257,23 +264,52 @@ var UIAPI = (function () {
       registered: !!sess.reg,
       serverTime: new Date().toISOString(),
       catalog: readCatalog_(),
+      payments: readPayments_(),
       guests: readGuests_(),
-      shift: shiftState_()
+      shift: shiftState_(),
+      lines: readLines_()
     };
     if (sess.reg) {
       // Hashes let the registered reception computer check passwords during an outage.
       out.users = readUsers_().filter(function (u) { return u.active && u.hash; }).map(function (u) {
-        return { username: u.username, name: u.name, role: u.role, hash: u.hash, salt: u.salt, rounds: HASH_ROUNDS };
+        return { username: u.username, name: u.name, role: u.role, author: u.author || u.username, hash: u.hash, salt: u.salt, rounds: HASH_ROUNDS };
       });
     }
     return out;
   }
+  /**
+   * Products sold at the desk, as in the old product dialog: the names listed under
+   * Service (L), Transport (M) and Tour (N) in Data activities, with price (B) and
+   * cost (C) looked up by name in column A. The column header is the sub-category.
+   */
   function readCatalog_() {
     var s = ss_().getSheetByName(SHEETS.catalog);
     if (!s || s.getLastRow() < 2) return [];
-    return s.getRange(2, 1, s.getLastRow() - 1, 2).getValues()
-      .filter(function (r) { return String(r[0]).trim() !== ''; })
-      .map(function (r) { return { name: String(r[0]).trim(), price: num_(r[1]) }; });
+    var n = s.getLastRow() - 1;
+    var head = s.getRange(1, 1, 1, 14).getValues()[0];
+    var rows = s.getRange(2, 1, n, 14).getValues();
+    var byName = {};
+    rows.forEach(function (r) {
+      var name = String(r[0]).trim();
+      if (name && !(name in byName)) byName[name] = { price: num_(r[1]), cost: num_(r[2]) };
+    });
+    var out = [], seen = {};
+    [11, 12, 13].forEach(function (c) { // L, M, N
+      var category = String(head[c]).trim();
+      rows.forEach(function (r) {
+        var name = String(r[c]).trim();
+        if (!name || !byName[name] || seen[category + '|' + name]) return;
+        seen[category + '|' + name] = true;
+        out.push({ name: name, category: category, price: byName[name].price, cost: byName[name].cost });
+      });
+    });
+    return out;
+  }
+  function readPayments_() {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    var list = s ? s.getRange('Q2:Q20').getValues().map(function (r) { return String(r[0]).trim(); }).filter(String) : [];
+    if (list.indexOf('Unpaid') < 0) list.push('Unpaid');
+    return list;
   }
   function readGuests_() {
     var names = {};
@@ -302,14 +338,34 @@ var UIAPI = (function () {
     var rows = shiftRows_();
     var recent = {};
     rows.slice(-20).forEach(function (r) { recent[String(r[COL.id])] = String(r[COL.status]); });
-    var log = ss_().getSheetByName(SHEETS.log);
-    var version = log ? log.getLastRow() : 0;
+    var version = version_();
     var last = rows[rows.length - 1];
     if (last && last[COL.status] === 'Open') {
       return { v: version, recent: recent, open: true, id: String(last[COL.id]), user: String(last[COL.user]),
         openedAt: iso_(last[COL.openedAt]), openingCash: num_(last[COL.openCash]) };
     }
     return { v: version, recent: recent, open: false, lastCashInBox: lastCashInBox_() };
+  }
+  function version_() {
+    var log = ss_().getSheetByName(SHEETS.log);
+    return Math.max(Number(PropertiesService.getScriptProperties().getProperty('UI_V') || 0), log ? log.getLastRow() : 0);
+  }
+  /** Who entered each line through the interface: line id -> username (from UI_Log sale entries). */
+  function soldBy_() {
+    var log = ss_().getSheetByName(SHEETS.log), out = {};
+    if (!log || log.getLastRow() < 2) return out;
+    log.getRange(2, 4, log.getLastRow() - 1, 7).getValues().forEach(function (r) {
+      if (r[4] !== 'applied') return;
+      try {
+        if (r[1] === 'sale') {
+          var user = String(r[0]).split(' ')[0];
+          (JSON.parse(r[6]).lines || []).forEach(function (l) { out[String(l.ts)] = user; });
+        } else if (r[1] === 'settle') { // a paid bill keeps its seller under its new id
+          (JSON.parse(r[6]).items || []).forEach(function (it) { if (out[String(it.oldTs)]) out[String(it.newTs)] = out[String(it.oldTs)]; });
+        }
+      } catch (e) { /* truncated payload */ }
+    });
+    return out;
   }
   function lastCashInBox_() {
     var s = ss_().getSheetByName(SHEETS.cash);
@@ -321,10 +377,298 @@ var UIAPI = (function () {
     return 0;
   }
 
+  // ---------- ledger (Entries / Entries Manual) ----------
+  // Same layout the old dialogs write. Entries: A date, B type, C sub-category, D object,
+  // E qty, F unit price, G total, H real price, I author, J unit cost, K cost, L real cost,
+  // M guest, N payment type, O timestamp (17 digits, text), P month correction, Q comment.
+  // Entries Manual: A..E, H, L, M, N like Entries; O author, P comment, Q timestamp;
+  // F, G, J, K hold formulas and are never written.
+  var E = { date: 0, type: 1, sub: 2, obj: 3, qty: 4, unit: 5, total: 6, real: 7, author: 8, unitCost: 9,
+    cost: 10, realCost: 11, guest: 12, pay: 13, ts: 14, past: 15, comment: 16 };
+  var M = { date: 0, type: 1, sub: 2, obj: 3, qty: 4, real: 7, realCost: 11, guest: 12, pay: 13, author: 14, comment: 15, ts: 16 };
+  var TS_TZ = 'Asia/Singapore'; // timestamps follow the script timezone of the old dialogs (UTC+8)
+  var LINE_DAYS = 21;           // paid lines sent to the device; unpaid ones are always sent
+
+  function tsOf_(d) { return Utilities.formatDate(d, TS_TZ, 'yyyyMMddHHmmssSSS'); }
+  function isTs_(v) { return /^\d{17}$/.test(String(v)); }
+  /** A sheet cell never starts a formula from typed text. */
+  function text_(v, max, field) {
+    var t = String(v === undefined || v === null ? '' : v).replace(/\s+/g, ' ').trim();
+    if (max && t.length > max) throw apiError_('bad_payload', field + ' is too long');
+    return /^[=+@]/.test(t) ? "'" + t : t;
+  }
+  function qty_(v) {
+    var n = Number(v);
+    if (!isFinite(n) || n <= 0 || n > 1000) throw apiError_('bad_amount', 'Invalid quantity');
+    return Math.round(n * 100) / 100;
+  }
+  function payment_(v, allowUnpaid) {
+    var p = String(v || '').trim();
+    var ok = readPayments_();
+    if (ok.indexOf(p) < 0 || (!allowUnpaid && p === 'Unpaid')) throw apiError_('bad_payment', 'Unknown payment type ' + p);
+    return p;
+  }
+  function entries_() {
+    var s = sheet_(SHEETS.entries);
+    var last = lastRowIn_(s, 1, 15);
+    var rows = last >= 2 ? s.getRange(2, 1, last - 1, 17).getValues() : [];
+    var byTs = {}, all = {};
+    rows.forEach(function (r, i) { var t = String(r[E.ts]); if (isTs_(t)) { byTs[t] = i + 2; (all[t] = all[t] || []).push(i + 2); } });
+    return { sheet: s, rows: rows, last: last, byTs: byTs, all: all, row: function (ts) { var n = byTs[ts]; return n ? rows[n - 2] : null; } };
+  }
+  function manual_() {
+    var s = sheet_(SHEETS.manual);
+    var last = lastRowIn_(s, 1, 3);
+    var ts = last >= 2 ? s.getRange(2, M.ts + 1, last - 1, 1).getValues() : [];
+    var byTs = {}, all = {};
+    ts.forEach(function (r, i) { var t = String(r[0]); if (isTs_(t)) { byTs[t] = i + 2; (all[t] = all[t] || []).push(i + 2); } });
+    return { sheet: s, last: last, byTs: byTs, all: all };
+  }
+  /** Appends Entries rows (17 columns) after the last data row; timestamps stay text. */
+  function appendEntries_(ent, rows) {
+    if (!rows.length) return;
+    var r = ent.last + 1;
+    ent.sheet.getRange(r, E.ts + 1, rows.length, 1).setNumberFormat('@');
+    ent.sheet.getRange(r, 1, rows.length, 17).setValues(rows);
+    ent.sheet.getRange(r, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
+    ent.last += rows.length;
+  }
+  /** Appends Entries Manual rows from Entries-shaped rows, leaving the formula columns alone. */
+  function appendManual_(man, entryRows) {
+    if (!entryRows.length) return;
+    var r = man.last + 1, n = entryRows.length, s = man.sheet;
+    s.getRange(r, M.ts + 1, n, 1).setNumberFormat('@');
+    s.getRange(r, 1, n, 5).setValues(entryRows.map(function (e) { return [e[E.date], e[E.type], e[E.sub], e[E.obj], e[E.qty]]; }));
+    s.getRange(r, M.real + 1, n, 2).setValues(entryRows.map(function (e) { return [e[E.real], '']; }));
+    s.getRange(r, M.realCost + 1, n, 6).setValues(entryRows.map(function (e) {
+      return [e[E.realCost], e[E.guest], e[E.pay], e[E.author], e[E.comment], e[E.ts]];
+    }));
+    s.getRange(r, 1, n, 1).setNumberFormat('dd/MM/yyyy');
+    man.last += n;
+  }
+  /**
+   * Row numbers come from a read made a moment ago; another script may have moved rows
+   * since. Check the id is still on that row, otherwise fail without writing (retried later).
+   */
+  function verify_(sheet, rowNo, col, ts) {
+    if (String(sheet.getRange(rowNo, col).getValue()) !== String(ts)) throw new Error('Rows moved in ' + sheet.getName() + '; will retry');
+  }
+  var same_ = function (a, b) { return String(a).replace(/^'/, '') === String(b).replace(/^'/, ''); };
+  function lineOut_(r) {
+    return { ts: String(r[E.ts]), date: iso_(r[E.date]), type: String(r[E.type]), category: String(r[E.sub]),
+      object: String(r[E.obj]), qty: r[E.qty] === '' ? null : num_(r[E.qty]), unit: num_(r[E.unit]),
+      total: num_(r[E.real] !== '' ? r[E.real] : r[E.total]), unitCost: num_(r[E.unitCost]), cost: num_(r[E.realCost]),
+      author: String(r[E.author]), guest: String(r[E.guest]), payment: String(r[E.pay]),
+      comment: String(r[E.comment]), past: String(r[E.past]) === 'Past' };
+  }
+  var REFUND_MARKS = ['Refunded', 'Refunding'];
+  /** Lines the device keeps: everything unpaid, plus the last LINE_DAYS days. */
+  function readLines_() {
+    if (!ss_().getSheetByName(SHEETS.entries)) return [];
+    var from = tsOf_(new Date(Date.now() - LINE_DAYS * 86400000));
+    var sold = soldBy_();
+    return entries_().rows.filter(function (r) {
+      var t = String(r[E.ts]);
+      return isTs_(t) && (t >= from || String(r[E.pay]) === 'Unpaid');
+    }).map(function (r) { var l = lineOut_(r); if (sold[l.ts]) l.soldBy = sold[l.ts]; return l; });
+  }
+  /** The open shift of this user, if any (staff may only change lines of their own open shift). */
+  function myOpenShift_(me) {
+    var rows = shiftRows_(), last = rows[rows.length - 1];
+    return last && last[COL.status] === 'Open' && String(last[COL.user]) === me.username ? last : null;
+  }
+  function assertCanChange_(me, row) {
+    if (me.role !== 'staff') return;
+    var sh = myOpenShift_(me);
+    var ts = String(row[E.ts]);
+    var ok = sh && String(row[E.type]) === 'Income' && REFUND_MARKS.indexOf(String(row[E.comment])) < 0 &&
+      soldBy_()[ts] === me.username && ts >= tsOf_(new Date(sh[COL.openedAt]));
+    if (!ok) throw apiError_('forbidden', 'Only sales you entered during your own open shift can be changed. Ask a manager.');
+  }
+  function lineTs_(v, at) {
+    var t = String(v || '');
+    if (!isTs_(t)) throw apiError_('bad_payload', 'Invalid line id');
+    // Must be close to when the operation happened (device clock sanity).
+    var near = tsOf_(new Date(at.getTime() - 86400000)), far = tsOf_(new Date(at.getTime() + 86400000));
+    if (t < near || t > far) throw apiError_('bad_time', 'Line id does not match the operation time');
+    return t;
+  }
+
   // ---------- push ----------
   // Each handler: validate everything first, then write. Re-running it for the same
   // shiftId after a partial failure must not write twice.
   var HANDLERS = {
+    /** One sale: one line per product and per guest, all with the same payment type. */
+    sale: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var pay = payment_(p.payment, true);
+      var lines = Array.isArray(p.lines) ? p.lines : [];
+      if (!lines.length || lines.length > 200) throw apiError_('bad_payload', 'A sale needs 1 to 200 lines');
+      var author = me.author || me.username;
+      var day = dateOnly_(at);
+      var rows = lines.map(function (l) {
+        var ts = lineTs_(l.ts, at);
+        var q = qty_(l.qty), unit = amount_(l.unit, 'price'), unitCost = amount_(l.unitCost || 0, 'cost');
+        var total = Math.round(q * unit), cost = Math.round(q * unitCost);
+        var guest = text_(l.guest, 120, 'Guest'), obj = text_(l.object, 200, 'Product');
+        if (!guest || !obj) throw apiError_('bad_payload', 'Guest and product are required');
+        return [day, 'Income', text_(l.category, 60, 'Category'), obj, q, unit, total, total, author,
+          unitCost, cost, cost, guest, pay, ts, '', text_(l.comment, 300, 'Comment')];
+      });
+      var seen = {};
+      rows.forEach(function (r) { if (seen[r[E.ts]]) throw apiError_('bad_payload', 'Duplicate line id'); seen[r[E.ts]] = 1; });
+      var ent = entries_(), man = manual_();
+      // A line id already in the sheet is either our own earlier attempt (same guest and
+      // product: skip it) or a collision with another line (refuse, nothing written).
+      rows.forEach(function (r) {
+        var ex = ent.row(r[E.ts]);
+        if (ex && (!same_(ex[E.guest], r[E.guest]) || !same_(ex[E.obj], r[E.obj]))) {
+          throw apiError_('ts_collision', 'The sheet already has a different line with this id. Nothing was written; check with a manager before entering the sale again.');
+        }
+      });
+      appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }));
+      appendManual_(man, rows.filter(function (r) { return !man.byTs[r[E.ts]]; }));
+      var res = { lines: rows.length };
+      if (!shiftRows_().some(function (r) { return r[COL.status] === 'Open'; })) res.warning = 'Recorded while no shift was open';
+      return res;
+    },
+    /** Change quantity, unit price, payment type, guest or comment of one line (every copy of it). */
+    line_update: function (op, me) {
+      var p = op.payload || {};
+      parseAt_(op.at);
+      var ts = String(p.ts);
+      var ent = entries_();
+      var rowNo = ent.byTs[ts];
+      if (!rowNo) throw apiError_('line_not_found', 'This line is no longer in the sheet');
+      var row = ent.rows[rowNo - 2].slice();
+      assertCanChange_(me, row);
+      var before = lineOut_(row);
+      if (p.qty !== undefined || p.unit !== undefined) {
+        var q = p.qty !== undefined ? qty_(p.qty) : (num_(row[E.qty]) || 1);
+        var unit = p.unit !== undefined ? amount_(p.unit, 'price') : num_(row[E.unit]);
+        var total = Math.round(q * unit);
+        row[E.qty] = q; row[E.unit] = unit; row[E.total] = total; row[E.real] = total;
+        if (row[E.unitCost] !== '') { var cost = Math.round(q * num_(row[E.unitCost])); row[E.cost] = cost; row[E.realCost] = cost; }
+      }
+      if (p.payment !== undefined) row[E.pay] = payment_(p.payment, true);
+      if (p.guest !== undefined) { row[E.guest] = text_(p.guest, 120, 'Guest'); if (!row[E.guest]) throw apiError_('bad_payload', 'Guest is required'); }
+      if (p.comment !== undefined && REFUND_MARKS.indexOf(String(row[E.comment])) < 0) row[E.comment] = text_(p.comment, 300, 'Comment');
+      var man = manual_();
+      (ent.all[ts] || []).forEach(function (n) {
+        verify_(ent.sheet, n, E.ts + 1, ts);
+        ent.sheet.getRange(n, E.qty + 1, 1, 4).setValues([[row[E.qty], row[E.unit], row[E.total], row[E.real]]]);
+        ent.sheet.getRange(n, E.cost + 1, 1, 4).setValues([[row[E.cost], row[E.realCost], row[E.guest], row[E.pay]]]);
+        ent.sheet.getRange(n, E.comment + 1).setValue(row[E.comment]);
+      });
+      (man.all[ts] || []).forEach(function (n) {
+        verify_(man.sheet, n, M.ts + 1, ts);
+        man.sheet.getRange(n, M.qty + 1).setValue(row[E.qty]);
+        man.sheet.getRange(n, M.real + 1).setValue(row[E.real]);
+        man.sheet.getRange(n, M.realCost + 1, 1, 3).setValues([[row[E.realCost], row[E.guest], row[E.pay]]]);
+        man.sheet.getRange(n, M.comment + 1).setValue(row[E.comment]);
+      });
+      return { audit: { before: before } };
+    },
+    /** Remove a line, every copy of it in both sheets (bottom-up so row numbers stay valid). */
+    line_delete: function (op, me) {
+      var p = op.payload || {};
+      parseAt_(op.at);
+      var ts = String(p.ts);
+      var ent = entries_(), man = manual_();
+      var eRows = (ent.all[ts] || []).slice().sort(function (a, b) { return b - a; });
+      var mRows = (man.all[ts] || []).slice().sort(function (a, b) { return b - a; });
+      if (!eRows.length && !mRows.length) return { already: true };
+      var before = null;
+      if (eRows.length) { before = lineOut_(ent.rows[eRows[0] - 2]); assertCanChange_(me, ent.rows[eRows[0] - 2]); }
+      else if (me.role === 'staff') throw apiError_('forbidden', 'Ask a manager to delete this line');
+      mRows.forEach(function (n) { verify_(man.sheet, n, M.ts + 1, ts); man.sheet.deleteRow(n); });
+      eRows.forEach(function (n) { verify_(ent.sheet, n, E.ts + 1, ts); ent.sheet.deleteRow(n); });
+      return { audit: { before: before } };
+    },
+    /**
+     * A guest pays lines left Unpaid: payment type, author and timestamp change, as in the
+     * old billing dialog. Each item can be resumed if an earlier attempt stopped half-way.
+     */
+    settle: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var pay = payment_(p.payment, false);
+      var items = Array.isArray(p.items) ? p.items : [];
+      if (!items.length || items.length > 200) throw apiError_('bad_payload', 'Nothing to settle');
+      var author = me.author || me.username;
+      var ent = entries_(), man = manual_();
+      var todo = [];
+      items.forEach(function (it) {
+        var oldTs = String(it.oldTs), newTs = lineTs_(it.newTs, at);
+        var rowNo = ent.byTs[oldTs];
+        if (!rowNo) {
+          if (!ent.byTs[newTs]) throw apiError_('line_not_found', 'An unpaid line is no longer in the sheet');
+          todo.push({ entries: false, mRow: man.byTs[oldTs], oldTs: oldTs, newTs: newTs }); // finish Manual if needed
+          return;
+        }
+        var row = ent.rows[rowNo - 2];
+        var ours = String(row[E.pay]) === pay && String(row[E.author]) === author; // stopped half-way before
+        if (String(row[E.pay]) !== 'Unpaid' && !ours) {
+          throw apiError_('already_paid', String(row[E.obj]) + ' for ' + row[E.guest] + ' is already paid (' + row[E.pay] + ')');
+        }
+        todo.push({ entries: true, rowNo: rowNo, mRow: man.byTs[oldTs], oldTs: oldTs, newTs: newTs, before: lineOut_(row) });
+      });
+      todo.forEach(function (t) {
+        if (t.entries) {
+          verify_(ent.sheet, t.rowNo, E.ts + 1, t.oldTs);
+          ent.sheet.getRange(t.rowNo, E.author + 1).setValue(author);
+          ent.sheet.getRange(t.rowNo, E.ts + 1).setNumberFormat('@');
+          ent.sheet.getRange(t.rowNo, E.pay + 1, 1, 2).setValues([[pay, t.newTs]]); // payment and id together
+        }
+        if (t.mRow) {
+          verify_(man.sheet, t.mRow, M.ts + 1, t.oldTs);
+          man.sheet.getRange(t.mRow, M.ts + 1).setNumberFormat('@');
+          man.sheet.getRange(t.mRow, M.pay + 1, 1, 4).setValues([[pay, author, man.sheet.getRange(t.mRow, M.comment + 1).getValue(), t.newTs]]);
+        }
+      });
+      var done = todo.filter(function (t) { return t.entries; });
+      return { settled: done.length, audit: { before: done.map(function (t) { return t.before; }) } };
+    },
+    /**
+     * Refund (all or part) of a paid sale: one Expense line in the current shift, and the
+     * sale marked Refunded, with the exact words the commission scripts look for.
+     * A retry finishes whatever an interrupted attempt left undone.
+     */
+    refund: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var newTs = lineTs_(p.newTs, at);
+      var pay = payment_(p.payment, false);
+      var amount = amount_(p.amount, 'amount');
+      var origTs = String(p.origTs);
+      var ent = entries_(), man = manual_();
+      var rowNo = ent.byTs[origTs];
+      var orig = rowNo ? ent.rows[rowNo - 2] : null;
+      var existing = ent.row(newTs);
+      if (existing) {
+        if (String(existing[E.type]) !== 'Expense' || String(existing[E.comment]) !== 'Refunding' ||
+            (orig && (!same_(existing[E.guest], orig[E.guest]) || !same_(existing[E.obj], orig[E.obj])))) {
+          throw apiError_('ts_collision', 'The sheet already has a different line with this id. Nothing was written.');
+        }
+      } else {
+        if (!orig) throw apiError_('line_not_found', 'The sale is no longer in the sheet');
+        if (String(orig[E.type]) !== 'Income') throw apiError_('bad_payload', 'Only a sale can be refunded');
+        if (String(orig[E.pay]) === 'Unpaid') throw apiError_('bad_payload', 'This sale was never paid; delete or change it instead');
+        if (String(orig[E.comment]) === 'Refunded') throw apiError_('already_refunded', 'This sale was already refunded');
+        if (me.role === 'staff' && pay !== String(orig[E.pay])) throw apiError_('forbidden', 'Refund with the same payment type as the sale (' + orig[E.pay] + '), or ask a manager');
+        var paid = num_(orig[E.real] !== '' ? orig[E.real] : orig[E.total]);
+        if (amount <= 0 || amount > paid) throw apiError_('bad_amount', 'Refund must be between 1 and ' + paid);
+      }
+      var row = existing || [dateOnly_(at), 'Expense', orig[E.sub], orig[E.obj], orig[E.qty], '', '', '', me.author || me.username,
+        '', '', amount, orig[E.guest], pay, newTs, '', 'Refunding'];
+      if (!existing) appendEntries_(ent, [row]);
+      if (rowNo && String(orig[E.comment]) !== 'Refunded') { verify_(ent.sheet, rowNo, E.ts + 1, origTs); ent.sheet.getRange(rowNo, E.comment + 1).setValue('Refunded'); }
+      if (!man.byTs[newTs]) appendManual_(man, [row]);
+      var mOrig = man.byTs[origTs];
+      if (mOrig) { verify_(man.sheet, mOrig, M.ts + 1, origTs); man.sheet.getRange(mOrig, M.comment + 1).setValue('Refunded'); }
+      return existing ? { already: true } : { audit: { before: lineOut_(orig), reason: String(p.reason || '').slice(0, 300) } };
+    },
     shift_open: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
@@ -369,10 +713,19 @@ var UIAPI = (function () {
       }
       if (rec[COL.user] !== me.username && me.role === 'staff') throw apiError_('forbidden', 'Only the shift owner or a manager can close it');
       var shifts = sheet_(SHEETS.shifts), cash = sheet_(SHEETS.cash), manual = sheet_(SHEETS.manual);
-      var diff = counted + cashout - expected;
+      // Expected cash from the sheet itself: opening + cash sales - cash paid out in the shift.
+      var from = tsOf_(new Date(rec[COL.openedAt])), to = tsOf_(at);
+      var sheetExpected = num_(rec[COL.openCash]);
+      if (ss_().getSheetByName(SHEETS.entries)) entries_().rows.forEach(function (r) {
+        var t = String(r[E.ts]);
+        if (!isTs_(t) || t < from || t >= to || String(r[E.pay]) !== 'Cash') return;
+        if (r[E.type] === 'Income') sheetExpected += num_(r[E.real] !== '' ? r[E.real] : r[E.total]);
+        else if (r[E.type] === 'Expense') sheetExpected -= num_(r[E.realCost]);
+      });
+      var diff = counted + cashout - sheetExpected;
       var author = rec[COL.author] || me.author || me.username;
       var tag = '[' + p.shiftId + ']';
-      var stamp = fmt_(at, 'yyyyMMddHHmmssSSS');
+      var stamp = tsOf_(at);
       // Partial-failure safe: each write checks whether a previous attempt already made it.
       var cashRows = cash.getLastRow() >= 2 ? cash.getRange(2, 8, cash.getLastRow() - 1, 2).getValues() : [];
       if (!cashRows.some(function (r) { return String(r[0]).indexOf(tag) >= 0 && r[1] === 'Closing'; })) {
@@ -392,9 +745,10 @@ var UIAPI = (function () {
         manual.getRange(r, 1).setNumberFormat('dd/MM/yyyy');
       }
       // UI_Shifts last: it is the "done" marker. {opId} lets a retry recognise its own close.
-      var comment = [rec[COL.comment], String(p.comment || ''), '{' + op.id + '}'].filter(String).join(' | ');
+      var note = expected !== sheetExpected ? 'screen expected ' + expected + ', sheet ' + sheetExpected : '';
+      var comment = [rec[COL.comment], String(p.comment || ''), note, '{' + op.id + '}'].filter(String).join(' | ');
       shifts.getRange(idx + 2, COL.closedAt + 1, 1, 7).setValues([[at, counted, cashout, diff, 'Closed', me.username, comment]]);
-      return { shiftId: p.shiftId, difference: diff };
+      return { shiftId: p.shiftId, difference: diff, expected: sheetExpected };
     }
   };
 
@@ -429,8 +783,10 @@ var UIAPI = (function () {
           who = a.user.username + (a.via === 'session' ? '' : ' (' + a.via + ')');
           var h = HANDLERS[op.type];
           if (!h) throw apiError_('unknown_type', 'Unknown operation ' + op.type);
-          res = h(op, a.user);
+          res = h(op, a.user) || {};
           status = 'applied';
+          if (res.audit || res.warning) detail = JSON.stringify({ warning: res.warning, audit: res.audit }).slice(0, 20000);
+          delete res.audit;
         } catch (e) {
           // Not a business refusal (Google timeout, quota...): stop here, do not mark
           // as seen, report what was done so far; the device retries the rest later.
@@ -443,9 +799,11 @@ var UIAPI = (function () {
           detail = e.apiCode + ': ' + e.message;
           res = { error: e.apiCode, message: e.message };
         }
+        var vBefore = version_();
         log.appendRow([new Date(), id, String(body.deviceId || ''), who, String(op.type),
-          String(op.payload && op.payload.shiftId || ''), String(op.at || ''), status, detail,
-          JSON.stringify(op.payload || {}).slice(0, 5000)]);
+          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs) || ''), String(op.at || ''), status, detail,
+          JSON.stringify(op.payload || {}).slice(0, 45000)]);
+        PropertiesService.getScriptProperties().setProperty('UI_V', String(vBefore + 1));
         seen[id] = { status: status, detail: detail };
         var out = { id: id, status: status };
         Object.keys(res || {}).forEach(function (key) { out[key] = res[key]; });
@@ -459,7 +817,7 @@ var UIAPI = (function () {
   function handle(e) {
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;

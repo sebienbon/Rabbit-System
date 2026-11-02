@@ -1,5 +1,6 @@
 import { db } from './db.js';
 import { enqueue } from './sync.js';
+import { ledgerView, shiftLines, totals } from './ledger.js';
 
 // Local view of shifts. The computer is the source of truth while offline;
 // the server re-checks every operation when it arrives.
@@ -29,9 +30,10 @@ export async function cashInBoxBeforeOpening() {
   return lastClosed ? lastClosed.closingCash : 0;
 }
 
-/** Cash movements recorded during the shift (sales module plugs in here). */
-export async function cashMovements(/* shift */) {
-  return { cashIn: 0, cashOut: 0 };
+/** Cash taken and paid out during the shift, from the lines recorded in it. */
+export async function cashMovements(shift) {
+  const t = totals(shiftLines(await ledgerView(), shift));
+  return { cashIn: t.cashIn, cashOut: t.cashOut };
 }
 
 export async function expectedCash(shift) {
