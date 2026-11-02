@@ -62,8 +62,9 @@ test('back-before rule: 24 h, out before noon → next day 12:00, from noon → 
   const next = d => new Date(new Date(day + 'T00:00:00Z').getTime() + d * 86400000).toISOString().slice(0, 10);
   assert.strictEqual(back('SG001'), next(1) + 'T12:00');
   assert.strictEqual(back('SG002'), next(2) + 'T18:00');
-  assert.strictEqual(env.book['SG'].data[1][1], 'Out');
-  assert.strictEqual(env.book['SG'].data[1][2], 'Ann');
+  assert.deepStrictEqual(env.book['SG'].data[0].slice(0, 4), ['Number', 'Type', 'In use', 'Status (auto)']);
+  assert.deepStrictEqual(env.book['SG'].data[1].slice(0, 5), ['SG001', 'Mask', true, 'Out', 'Ann']);
+  assert.ok(env.book['SG'].data[1][6] instanceof Date, 'back before is a date');
 });
 
 test('a rental is a sale line per number; a number already out never refuses the money, it becomes a difference', () => {
@@ -214,4 +215,16 @@ test('Sunset Boat: a number still rented keeps its rental and is not on the boat
   const all = gearOf(env, made).items.map(i => i.id).filter(x => x !== 'SG001');
   push(env, made, op('gear_count', { cid: id('K'), items: all.map(x => ({ item: x, condition: 'OK' })) }));
   assert.ok(!gearOf(env, ayu).diffs.some(d => d.item === 'SG001' && d.kind === 'missing'));
+});
+
+test('SG tab: own layout built from the old list; a retired number disappears; old statuses ignored', () => {
+  const env = freshEnv();
+  const sg = env.book['SG'];
+  assert.strictEqual(sg.data.length, 8);
+  assert.deepStrictEqual(sg.data[7].slice(0, 4), ['B1', 'Bike', true, 'In']);
+  sg.data[2][2] = false; // SG002 retired
+  const ayu = login(env, 'ayu');
+  const g = gearOf(env, ayu);
+  assert.ok(!g.items.some(i => i.id === 'SG002'));
+  assert.strictEqual(item(g, 'B1').kind, 'bike');
 });

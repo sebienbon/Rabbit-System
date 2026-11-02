@@ -767,8 +767,28 @@ var UIAPI = (function () {
     ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', '+62…']];
   var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Broken', 'Lost'];
   var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1 }; // what the gear role may send
+  /**
+   * SG tab, our own layout: A number, B type (Mask / Bike), C in use (untick to retire a number)
+   * are kept by hand; D–H are written by the interface from Gear_Log (do not edit); I is a free note.
+   */
+  var SG_HEADER = ['Number', 'Type', 'In use', 'Status (auto)', 'Guest / trip (auto)', 'Since (auto)', 'Back before (auto)', 'Condition (auto)', 'Note'];
   function gearSetup_() {
     ensureSheet_(SHEETS.gearLog, GEAR_LOG_HEADER).getRange('B:B').setNumberFormat('@');
+    var sg = ss_().getSheetByName(SHEETS.sg);
+    if (!sg) sg = ss_().insertSheet(SHEETS.sg);
+    var head = sg.getLastRow() >= 1 ? sg.getRange(1, 1, 1, 2).getValues()[0] : ['', ''];
+    if (String(head[0]) !== 'Number' || String(head[1]) !== 'Type') {
+      // Old test layout: keep only the list of numbers, everything else comes from Gear_Log.
+      var ids = [], seen = {};
+      if (sg.getLastRow() >= 2) sg.getRange(2, 1, sg.getLastRow() - 1, 1).getValues().forEach(function (r) {
+        var id = String(r[0]).trim().toUpperCase();
+        if (id && !seen[id] && /^[A-Z]{1,3}\d+$/.test(id)) { seen[id] = 1; ids.push(id); }
+      });
+      sg.clearContents();
+      var rows = [SG_HEADER].concat(ids.map(function (id) { return [id, gearKind_(id) === 'bike' ? 'Bike' : 'Mask', true, 'In', '', '', '', 'OK', '']; }));
+      sg.getRange(1, 1, rows.length, SG_HEADER.length).setValues(rows);
+      try { if (ids.length) sg.getRange(2, 3, ids.length, 1).insertCheckboxes(); } catch (e) { /* plain TRUE/FALSE is fine */ }
+    }
     if (!ss_().getSheetByName(SHEETS.gearSettings)) {
       var s = ss_().insertSheet(SHEETS.gearSettings);
       s.getRange(1, 1, GEAR_SETTINGS_DEFAULT.length, 3).setValues(GEAR_SETTINGS_DEFAULT);
@@ -823,16 +843,24 @@ var UIAPI = (function () {
     }));
   }
   /** Keeps the SG sheet as the old dialogs did (B status, C guest, D time, E days, F back before). */
-  function sgUpdate_(id, values) {
+  var gearDirty_ = false;
+  function sgUpdate_() { gearDirty_ = true; } // the SG mirror is rewritten once the operation is done
+  /** Writes the automatic columns of SG (D–H) from the replayed state: same result on every retry. */
+  function sgSync_() {
     var s = ss_().getSheetByName(SHEETS.sg);
-    if (!s || s.getLastRow() < 2) return;
+    if (!s || s.getLastRow() < 2 || String(s.getRange(1, 1).getValue()) !== 'Number') return;
+    var st = gearState_(), byId = {};
+    st.items.forEach(function (i) { byId[i.id] = i; });
     var ids = s.getRange(2, 1, s.getLastRow() - 1, 1).getValues();
-    for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]).trim().toUpperCase() !== id) continue;
-      if (values.status !== undefined) s.getRange(i + 2, 2).setValue(values.status);
-      if (values.guest !== undefined) s.getRange(i + 2, 3, 1, 4).setValues([[safe_(values.guest), values.from, values.days, values.back || '']]);
-      return;
-    }
+    var out = ids.map(function (r) {
+      var it = byId[String(r[0]).trim().toUpperCase()];
+      if (!it) return ['', '', '', '', ''];
+      var away = it.where === 'out' || it.where === 'sunset';
+      return [it.where === 'sunset' ? 'Sunset Boat' : it.where === 'out' ? 'Out' : it.where === 'lost' ? 'Lost' : 'In',
+        away && it.last ? safe_(String(it.last.guest || '')) : '', away && it.last && it.last.from ? new Date(it.last.from) : '',
+        away && it.back ? new Date(it.back) : '', it.condition];
+    });
+    s.getRange(2, 4, out.length, 5).setValues(out);
   }
   /**
    * The whole state, replayed: items (where, condition, last use, back before), open
@@ -841,19 +869,13 @@ var UIAPI = (function () {
   function gearState_() {
     var s = ss_().getSheetByName(SHEETS.sg);
     var items = {}, order = [];
-    if (s && s.getLastRow() >= 2) s.getRange(2, 1, s.getLastRow() - 1, 6).getValues().forEach(function (r) {
+    var lay = s && s.getLastRow() >= 1 && String(s.getRange(1, 1).getValue()) === 'Number';
+    if (s && lay && s.getLastRow() >= 2) s.getRange(2, 1, s.getLastRow() - 1, 3).getValues().forEach(function (r) {
       var id = String(r[0]).trim().toUpperCase();
       if (!id || items[id]) return;
-      var st = String(r[1]).trim();
-      var it = { id: id, kind: gearKind_(id), where: 'in', condition: 'OK', last: null, back: null };
-      if (st === 'Out') {
-        it.where = 'out';
-        it.last = { kind: /sunset/i.test(String(r[2])) ? 'sunset' : /volunteer/i.test(String(r[2])) ? 'volunteer' : 'rental', guest: String(r[2]), from: iso_(r[3]) };
-        var b = r[5] instanceof Date ? null : String(r[5]).match(/^(\d\d)\/(\d\d)\/(\d{4}) (\d\d):(\d\d)/);
-        if (r[5] instanceof Date && !isNaN(r[5])) it.back = r[5].toISOString();
-        else if (b) it.back = Utilities.parseDate(b[3] + '-' + b[2] + '-' + b[1] + ' ' + b[4] + ':' + b[5] + ':00', TS_TZ, 'yyyy-MM-dd HH:mm:ss').toISOString();
-      } else if (st && st !== 'OK' && st !== 'In') it.condition = st === 'Lost' ? 'Lost' : st;
-      items[id] = it; order.push(id);
+      if (r[2] === false || /^(false|no|non|tidak)$/i.test(String(r[2]).trim())) return; // retired
+      var kind = /bike|sepeda|v[ée]lo/i.test(String(r[1])) ? 'bike' : /mask|masker|masque/i.test(String(r[1])) ? 'mask' : gearKind_(id);
+      items[id] = { id: id, kind: kind, where: 'in', condition: 'OK', last: null, back: null }; order.push(id);
     });
     var diffs = {}, damages = {}, trips = {}, counts = [];
     gearLogRows_().forEach(function (e) {
@@ -1838,6 +1860,7 @@ var UIAPI = (function () {
           var h = HANDLERS[op.type];
           if (!h) throw apiError_('unknown_type', 'Unknown operation ' + op.type);
           res = h(op, a.user) || {};
+          if (gearDirty_) { gearDirty_ = false; try { sgSync_(); } catch (e) { /* only the mirror: redone by the next gear operation */ } }
           status = 'applied';
           if (res.audit || res.warning) detail = JSON.stringify({ warning: res.warning, audit: res.audit }).slice(0, 20000);
           delete res.audit;

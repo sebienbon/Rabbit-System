@@ -59,7 +59,7 @@ const step = m => console.log('  ✓ ' + m);
     await desk.keyboard.type('sg001'); await desk.keyboard.press('Enter');
     await desk.waitForSelector('.chip:has-text("SG001")');
     await desk.click('[data-pay="Unpaid"]'); await desk.click('#recordSale');
-    await until(() => sg('SG001')[1] === 'Out', 'SG001 out');
+    await until(() => sg('SG001')[3] === 'Out', 'SG001 out');
     const sale = book['Entries'].data.find(r => r[3] === 'Snorkeling Mask');
     assert.strictEqual(sale[12], 'Alice Example'); assert.match(String(sale[16]), /SG001/);
     assert.ok(log().some(r => r[2] === 'out' && r[3] === 'SG001'));
@@ -113,7 +113,7 @@ const step = m => console.log('  ✓ ' + m);
     await phone.click('[data-go="diffs"]');
     await phone.click('.gadiff:has-text("SG001") [data-confirm]');
     await until(() => log().filter(r => r[2] === 'confirm' && r[3] === 'SG001').length === 2, 'both confirmed');
-    await until(() => sg('SG001')[1] === 'OK', 'SG001 back in');
+    await until(() => sg('SG001')[3] === 'In', 'SG001 back in');
     step('SG001 closed once both sides confirmed; back in stock without extension');
 
     // Damage SG006: charge Alice at the Gear_Settings price.

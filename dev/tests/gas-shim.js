@@ -69,6 +69,7 @@ class Sheet {
   deleteRow(r) { this.maybeFail('deleteRow'); this.data.splice(r - 1, 1); }
   appendRow(row) { this.maybeFail('appendRow'); const r = this.getLastRow() + 1; row.forEach((v, j) => this.set(r, j + 1, v)); return this; }
   setFrozenRows() { return this; }
+  clearContents() { this.data = []; if (this.textCells) this.textCells.clear(); return this; }
 }
 
 function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
