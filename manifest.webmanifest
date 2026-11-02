@@ -3,7 +3,7 @@
   "short_name": "Reception",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#F3F6F9",
-  "theme_color": "#1769C2",
-  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+  "background_color": "#FFF7ED",
+  "theme_color": "#7B3FC9",
+  "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }, { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }]
 }

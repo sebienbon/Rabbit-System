@@ -110,6 +110,6 @@ export function notifyOnce(key, title, body) {
     const day = new Date(Date.now() + TZ).toISOString().slice(0, 10);
     if (localStorage.getItem('notified:' + key) === day) return;
     localStorage.setItem('notified:' + key, day);
-    new Notification(title, { body, icon: 'icon.svg' });
+    new Notification(title, { body, icon: 'icon-192.png' });
   } catch { /* notifications unavailable */ }
 }
