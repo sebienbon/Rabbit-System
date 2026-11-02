@@ -70,6 +70,19 @@ export function applyOps(lines, ops) {
         guest: 'Cash Supply', comment: '', soldBy: op.by };
       if (!byTs.has(p.ts)) byTs.set(p.ts, mark({ ...base, ts: p.ts, type: 'Income', total: p.amount, cost: 0, payment: 'Cash' }));
       if (!byTs.has(p.ts2)) byTs.set(p.ts2, mark({ ...base, ts: p.ts2, type: 'Expense', total: 0, cost: p.amount, payment: 'Extern Cash' }));
+    } else if (op.type === 'partner_bill') {
+      for (const it of p.items || []) { const l = byTs.get(it.ts); if (l) { l.cost = it.cost; l.bill = p.bill; mark(l); } }
+    } else if (op.type === 'partner_bill_delete') {
+      for (const l of byTs.values()) if (l.bill === p.bill) { l.bill = ''; mark(l); }
+    } else if (op.type === 'partner_settle') {
+      for (const l of byTs.values()) if (l.bill === p.bill) { l.bill = 'Paid'; mark(l); }
+      for (const r of p.rows || []) {
+        if (!r.net || byTs.has(r.ts)) continue;
+        const toPartner = r.net > 0;
+        byTs.set(r.ts, mark({ ts: r.ts, type: toPartner ? 'Expense' : 'Income', category: '', object: r.object, qty: null, unit: 0,
+          total: toPartner ? 0 : -r.net, unitCost: 0, cost: toPartner ? r.net : 0, author: op.author || '',
+          guest: toPartner ? 'Payment to Partner' : 'Payment From Partner', payment: p.payment, comment: p.bill, bill: 'Settled', soldBy: '' }));
+      }
     } else if (op.type === 'refund') {
       const orig = byTs.get(p.origTs);
       if (orig) { orig.comment = 'Refunded'; mark(orig); }
@@ -127,6 +140,46 @@ export async function cashboxView() {
   const [entries, ops] = await Promise.all([db.get('cashbox'), newerOps()]);
   return applyCashOps(entries || [], ops);
 }
+/**
+ * Partner sales not settled yet (snapshot from the sheet), with bill operations replayed:
+ * bill = "" not billed, "B_dd/MM-HH:mm" on that bill; settled bills leave the list.
+ */
+export function applyPartnerOps(snap, ops) {
+  const lines = new Map((snap.lines || []).map(l => [l.ts, { ...l }]));
+  for (const { op, pending } of ops) {
+    const p = op.payload || {};
+    if (op.type === 'partner_bill') {
+      for (const it of p.items || []) { const l = lines.get(it.ts); if (l && (!l.bill || l.bill === p.bill)) { l.bill = p.bill; l.cost = it.cost; if (pending) l.pending = true; } }
+    } else if (op.type === 'partner_bill_delete') {
+      for (const l of lines.values()) if (l.bill === p.bill) { l.bill = ''; if (pending) l.pending = true; }
+    } else if (op.type === 'partner_settle') {
+      for (const [ts, l] of lines) if (l.bill === p.bill) lines.delete(ts);
+    } else if (op.type === 'settle') { // a guest paid an Unpaid sale: the line gets a new id
+      for (const it of p.items || []) {
+        const l = lines.get(it.oldTs);
+        if (!l || lines.has(it.newTs)) continue;
+        lines.delete(it.oldTs);
+        lines.set(it.newTs, { ...l, ts: it.newTs, payment: p.payment });
+      }
+    } else if (op.type === 'line_delete') {
+      lines.delete(p.ts);
+    } else if (op.type === 'line_update') {
+      const l = lines.get(p.ts);
+      if (l && p.payment !== undefined) l.payment = p.payment;
+      if (l && p.guest !== undefined) l.guest = p.guest;
+    } else if (op.type === 'refund') {
+      lines.delete(p.origTs); // a refunded sale no longer goes on a bill
+    }
+  }
+  return { items: snap.items || [], lines: [...lines.values()].sort((a, b) => (a.ts < b.ts ? -1 : 1)) };
+}
+export async function partnerView() {
+  const [snap, ops] = await Promise.all([db.get('partners'), newerOps()]);
+  return applyPartnerOps(snap || {}, ops);
+}
+/** What a line adds to its partner bill: its cost, or cost − price when the guest paid the partner. */
+export const billNet = l => Math.round(l.payment === 'Paid to Partner' ? (l.cost || 0) - (l.price || 0) : (l.cost || 0));
+
 /** Phantom rows recorded during a shift (the sheet keeps whole seconds for them). */
 export function shiftCash(entries, shift) {
   if (!shift) return [];
@@ -163,6 +216,7 @@ export function canChange(line, user, shift) {
   if (!user) return false;
   if (user.role !== 'staff') return true;
   if (line.object === 'Cash Supply') return false;
+  if (line.bill) return false; // on a partner bill (or a payment of one): a manager's job
   return !!shift && shift.status === 'open' && shift.user === user.username && (line.type === 'Income' || line.type === 'Expense') &&
     !REFUND_MARKS.includes(line.comment) && line.soldBy === user.username && line.ts >= tsFromIso(shift.openedAt);
 }

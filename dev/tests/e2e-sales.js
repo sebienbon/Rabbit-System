@@ -26,7 +26,7 @@ const step = m => console.log('  ✓ ' + m);
     while (Date.now() - t < ms) { if (re.test(await strip())) return; await page.waitForTimeout(250); }
     throw new Error('strip never matched ' + re + ', got: ' + (await strip()));
   };
-  const entries = () => book['Entries'].data.slice(1).filter(r => r[14]);
+  const entries = () => book['Entries'].data.slice(1).filter(r => r[14] && !['Ann', 'Ben', 'Cy'].includes(r[12])); // without the seeded partner sales
   const figure = async i => (await page.$$eval('.figures.row4 dd', els => els.map(e => e.textContent)))[i];
   const waitNotice = re => page.waitForFunction(r => new RegExp(r).test(document.querySelector('.notice')?.textContent || ''), re.source, { timeout: 15000 });
   const lineOf = (guest, product) => page.locator('li.line').filter({ hasText: guest }).filter({ has: page.locator('b', { hasText: new RegExp('^' + product + '$') }) });

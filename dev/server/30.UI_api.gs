@@ -268,7 +268,8 @@ var UIAPI = (function () {
       guests: readGuests_(),
       shift: shiftState_(),
       lines: readLines_(),
-      cashbox: readCashbox_()
+      cashbox: readCashbox_(),
+      partners: readPartners_()
     };
     if (sess.reg) {
       // Hashes let the registered reception computer check passwords during an outage.
@@ -387,7 +388,7 @@ var UIAPI = (function () {
   // Entries Manual: A..E, H, L, M, N like Entries; O author, P comment, Q timestamp;
   // F, G, J, K hold formulas and are never written.
   var E = { date: 0, type: 1, sub: 2, obj: 3, qty: 4, unit: 5, total: 6, real: 7, author: 8, unitCost: 9,
-    cost: 10, realCost: 11, guest: 12, pay: 13, ts: 14, past: 15, comment: 16 };
+    cost: 10, realCost: 11, guest: 12, pay: 13, ts: 14, past: 15, comment: 16, status: 18 };
   var M = { date: 0, type: 1, sub: 2, obj: 3, qty: 4, real: 7, realCost: 11, guest: 12, pay: 13, author: 14, comment: 15, ts: 16 };
   var TS_TZ = 'Asia/Singapore'; // timestamps follow the script timezone of the old dialogs (UTC+8)
   var LINE_DAYS = 21;           // paid lines sent to the device; unpaid ones are always sent
@@ -425,7 +426,7 @@ var UIAPI = (function () {
   function entries_() {
     var s = sheet_(SHEETS.entries);
     var last = lastRowIn_(s, 1, 15);
-    var rows = last >= 2 ? s.getRange(2, 1, last - 1, 17).getValues() : [];
+    var rows = last >= 2 ? s.getRange(2, 1, last - 1, 19).getValues() : [];
     var byTs = {}, all = {};
     rows.forEach(function (r, i) { var t = String(r[E.ts]); if (isTs_(t)) { byTs[t] = i + 2; (all[t] = all[t] || []).push(i + 2); } });
     return { sheet: s, rows: rows, last: last, byTs: byTs, all: all, row: function (ts) { var n = byTs[ts]; return n ? rows[n - 2] : null; } };
@@ -448,14 +449,14 @@ var UIAPI = (function () {
     ent.last += rows.length;
   }
   /** Appends Entries Manual rows from Entries-shaped rows, leaving the formula columns alone. */
-  function appendManual_(man, entryRows) {
+  function appendManual_(man, entryRows, colI) {
     if (!entryRows.length) return;
     var r = man.last + 1, n = entryRows.length, s = man.sheet;
     var rng = s.getRange(r, 1, n, 17);
     var formulas = rng.getFormulas(), current = rng.getValues();
     var keep = function (i, c) { return formulas[i][c] || current[i][c]; }; // F, G, J, K stay as they are
     var rows = entryRows.map(function (e, i) {
-      return [e[E.date], e[E.type], e[E.sub], e[E.obj], e[E.qty], keep(i, 5), keep(i, 6), e[E.real], '', keep(i, 9), keep(i, 10),
+      return [e[E.date], e[E.type], e[E.sub], e[E.obj], e[E.qty], keep(i, 5), keep(i, 6), e[E.real], (colI && colI[i]) || '', keep(i, 9), keep(i, 10),
         e[E.realCost], e[E.guest], e[E.pay], e[E.author], e[E.comment], e[E.ts]].map(function (v, c) {
           return [5, 6, 9, 10].indexOf(c) >= 0 ? v : safe_(v);
         });
@@ -478,7 +479,7 @@ var UIAPI = (function () {
       object: String(r[E.obj]), qty: r[E.qty] === '' ? null : num_(r[E.qty]), unit: num_(r[E.unit]),
       total: num_(r[E.real] !== '' ? r[E.real] : r[E.total]), unitCost: num_(r[E.unitCost]), cost: num_(r[E.realCost]),
       author: String(r[E.author]), guest: String(r[E.guest]), payment: String(r[E.pay]),
-      comment: String(r[E.comment]), past: String(r[E.past]) === 'Past' };
+      comment: String(r[E.comment]), past: String(r[E.past]) === 'Past', bill: String(r[E.status] || '').trim() };
   }
   var REFUND_MARKS = ['Refunded', 'Refunding'];
   /** Lines the device keeps: everything unpaid, plus the last LINE_DAYS days. */
@@ -501,8 +502,8 @@ var UIAPI = (function () {
     var sh = myOpenShift_(me);
     var ts = String(row[E.ts]);
     var ok = sh && ['Income', 'Expense'].indexOf(String(row[E.type])) >= 0 && REFUND_MARKS.indexOf(String(row[E.comment])) < 0 &&
-      soldBy_()[ts] === me.username && ts >= tsOf_(new Date(sh[COL.openedAt]));
-    if (!ok) throw apiError_('forbidden', 'Only sales and expenses you entered during your own open shift can be changed. Ask a manager.');
+      soldBy_()[ts] === me.username && ts >= tsOf_(new Date(sh[COL.openedAt])) && !String(row[E.status] || '').trim();
+    if (!ok) throw apiError_('forbidden', 'Only sales and expenses you entered during your own open shift, not yet on a partner bill, can be changed. Ask a manager.');
   }
   function lineTs_(v, at) {
     var t = String(v || '');
@@ -565,6 +566,127 @@ var UIAPI = (function () {
     return box;
   }
 
+  // ---------- partners (old "12." dialogs) ----------
+  // A partner product is a name starting with "-" in Data activities (L1:L15, M2:M50, N2:N50).
+  // Entries S holds the billing status of a partner sale: "" not billed, "B_dd/MM-HH:mm" on that
+  // bill, "Paid" once the bill is settled; the payment row itself has S "Settled".
+  var BILL_RE = /^B_\d\d\/\d\d-\d\d:\d\d$/;
+  var PAY_TO = 'Payment to Partner', PAY_FROM = 'Payment From Partner', PAID_TO_PARTNER = 'Paid to Partner';
+  var MAIL = { bills: 'therabbittreegilimeno@gmail.com', alerts: 'rabbittree.system.alerts.com@gmail.com' };
+  function partnerItems_() {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    if (!s) return [];
+    var out = [], seen = {};
+    var add = function (name, group) {
+      name = String(name).trim();
+      if (name.charAt(0) === '-' && !seen[name]) { seen[name] = true; out.push({ object: name, group: group }); }
+    };
+    var head = s.getRange(1, 12, 1, 3).getValues()[0];
+    s.getRange(1, 12, 15, 1).getValues().forEach(function (r) { add(r[0], String(head[0]).trim()); });
+    s.getRange(2, 13, 49, 2).getValues().forEach(function (r) { add(r[0], String(head[1]).trim()); add(r[1], String(head[2]).trim()); });
+    return out;
+  }
+  /** Header of the Data activities column (K..O, rows 2..40) listing the object: the sub-category of a payment row. */
+  function partnerCategory_(obj) {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    if (!s) return '';
+    var head = s.getRange(1, 11, 1, 5).getValues()[0], rows = s.getRange(2, 11, 39, 5).getValues();
+    for (var i = 0; i < rows.length; i++) for (var j = 0; j < 5; j++) if (String(rows[i][j]).trim() === obj) return String(head[j]).trim();
+    return '';
+  }
+  var priceOf_ = function (r) { return num_(r[E.real] !== '' ? r[E.real] : r[E.total]); };
+  var costOf_ = function (r) { return num_(r[E.realCost] !== '' ? r[E.realCost] : r[E.cost]); };
+  /** A sale that can go on a partner bill: Income of a partner product, not a payment row nor a refund line. */
+  var REFUND_ANY = ['Refunded', 'Refunding', 'Refund-ed', 'Refund-ing']; // the old dialog wrote the dashed forms
+  function isPartnerSale_(r, set) {
+    return String(r[E.type]) === 'Income' && set[String(r[E.obj]).trim()] && [PAY_TO, PAY_FROM].indexOf(String(r[E.guest])) < 0 &&
+      REFUND_ANY.indexOf(String(r[E.comment]).trim()) < 0 && isTs_(String(r[E.ts]));
+  }
+  /** The sales of a bill that count, once per line id (a line copied twice by the old sync counts once). */
+  function billLines_(ent, bill) {
+    var set = {}, seen = {};
+    partnerItems_().forEach(function (it) { set[it.object] = true; });
+    return ent.rows.filter(function (r) {
+      var t = String(r[E.ts]);
+      if (String(r[E.status] || '').trim() !== bill || !isPartnerSale_(r, set) || seen[t]) return false;
+      return (seen[t] = true);
+    });
+  }
+  /** What one line adds to the bill: its cost if the guest paid us, cost − price if the guest paid the partner. */
+  function billNet_(r) { return Math.round(String(r[E.pay]) === PAID_TO_PARTNER ? costOf_(r) - priceOf_(r) : costOf_(r)); }
+  /** Partner sales not settled yet (not billed, or on a bill), however old. */
+  function readPartners_() {
+    var items = partnerItems_();
+    var set = {};
+    items.forEach(function (it) { set[it.object] = true; });
+    var lines = [], seen = {};
+    if (ss_().getSheetByName(SHEETS.entries)) entries_().rows.forEach(function (r) {
+      var st = String(r[E.status] || '').trim();
+      if (!isPartnerSale_(r, set) || !(st === '' || BILL_RE.test(st)) || seen[String(r[E.ts])]) return;
+      seen[String(r[E.ts])] = true;
+      lines.push({ ts: String(r[E.ts]), date: iso_(r[E.date]), object: String(r[E.obj]).trim(), qty: r[E.qty] === '' ? null : num_(r[E.qty]),
+        price: priceOf_(r), cost: costOf_(r), guest: String(r[E.guest]), payment: String(r[E.pay]), comment: String(r[E.comment]), bill: st });
+    });
+    return { items: items, lines: lines };
+  }
+  /** The bill as the old dialogs printed it: per object, the lines paid at the Rabbit Tree, then those paid to the partner. */
+  function billHtml_(title, by, when, rows) {
+    var esc = function (v) { return String(v === null || v === undefined ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var objects = [], by_ = {};
+    rows.forEach(function (r) { var o = String(r[E.obj]).trim(); if (!by_[o]) { by_[o] = []; objects.push(o); } by_[o].push(r); });
+    var html = '<html><head><style>body{font-family:Arial,sans-serif;margin:20px;text-align:center}table{width:100%;border-collapse:collapse}' +
+      'th,td{padding:8px;text-align:center;border:1px solid #ddd}th{background:#91c5ed;color:#fff}.sub{font-weight:bold}.tot{font-weight:bold;font-size:18px}' +
+      '.inv{font-weight:bold;font-size:24px;border-top:2px solid #000;border-bottom:2px solid #000}</style></head><body>' +
+      '<h1>' + esc(title + ' (' + objects.join(', ') + ')') + '</h1><h2>Created by ' + esc(by) + '</h2><h3>' + esc(when) + '</h3><table>';
+    var invoiced = 0;
+    objects.forEach(function (o) {
+      var sections = [['Paid at the rabbit tree', by_[o].filter(function (r) { return String(r[E.pay]) !== PAID_TO_PARTNER; })],
+        ['Paid by the guest to the Partner', by_[o].filter(function (r) { return String(r[E.pay]) === PAID_TO_PARTNER; })]];
+      var cat = 0;
+      html += '<tr><th colspan="6">' + esc(o) + '</th></tr>';
+      sections.forEach(function (sec) {
+        if (!sec[1].length) return;
+        html += '<tr><th colspan="6"><i>' + sec[0] + '</i></th></tr><tr><th>Date</th><th>Qty</th><th>Cost</th><th>Price Sold</th><th>Commission</th><th>Guest Name</th></tr>';
+        var sub = 0;
+        sec[1].forEach(function (r) {
+          var net = billNet_(r);
+          html += '<tr><td>' + esc(r[E.date] instanceof Date ? fmt_(r[E.date], 'dd/MM/yyyy') : r[E.date]) + '</td><td>' + esc(r[E.qty]) + '</td><td>' + costOf_(r) +
+            '</td><td>' + priceOf_(r) + '</td><td>' + (String(r[E.pay]) === PAID_TO_PARTNER ? net : '') + '</td><td>' + esc(r[E.guest]) + '</td></tr>';
+          sub += net;
+        });
+        html += '<tr class="sub"><td colspan="6">' + (sec[0] === 'Paid at the rabbit tree' ? 'Total Cost: ' : 'Total Commission: ') + sub.toFixed(2) + '</td></tr>';
+        cat += sub;
+      });
+      html += '<tr class="tot"><td colspan="6">Total of Category: ' + cat.toFixed(2) + '</td></tr>';
+      invoiced += cat;
+    });
+    return html + '<tr class="inv"><td colspan="6">Total Invoiced: ' + invoiced.toFixed(2) + '</td></tr>' +
+      '<tr><td colspan="6"><b><i>Best Regards from The Rabbit Tree Team!</i></b></td></tr></table></body></html>';
+  }
+  /**
+   * Sends one email once per operation (a retry after a later failure does not send it again).
+   * A mail failure (quota, bad address) never blocks the operation: it comes back as a warning.
+   */
+  var MAIL_KINDS = ['cost', 'bill', 'settle'];
+  function mailOnce_(op, kind, msg) {
+    var props = PropertiesService.getScriptProperties(), key = 'UI_MAIL_' + op.id + '_' + kind;
+    if (props.getProperty(key)) return '';
+    var to = msg.to.filter(function (a) { return /^[^@\s,;]+@[^@\s,;]+$/.test(a); });
+    if (!to.length) return '';
+    try {
+      var mail = { to: to.join(', '), subject: msg.subject, body: msg.body || '' };
+      if (msg.html) mail.htmlBody = msg.html;
+      if (msg.pdf) mail.attachments = [Utilities.newBlob(msg.pdf, 'text/html', 'bill.html').getAs('application/pdf').setName(msg.pdfName)];
+      MailApp.sendEmail(mail);
+    } catch (e) {
+      console.error(e);
+      return 'Email "' + msg.subject + '" not sent: ' + e.message;
+    }
+    props.setProperty(key, new Date().toISOString());
+    return '';
+  }
+  function htmlEsc_(v) { return String(v === null || v === undefined ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
   // ---------- push ----------
   // Each handler: validate everything first, then write. Re-running it for the same
   // shiftId after a partial failure must not write twice.
@@ -616,6 +738,9 @@ var UIAPI = (function () {
       assertCanChange_(me, row);
       var before = lineOut_(row);
       var isExp = String(row[E.type]) === 'Expense';
+      if (String(row[E.status] || '').trim() && (p.qty !== undefined || p.unit !== undefined)) {
+        throw apiError_('bad_payload', 'This sale is on a partner bill (' + String(row[E.status]).trim() + '): its quantity and price cannot change');
+      }
       if (String(row[E.obj]) === 'Cash Supply') throw apiError_('bad_payload', 'A cash supply cannot be edited; a manager can delete it and enter it again');
       if (isExp && (p.qty !== undefined || p.unit !== undefined || p.guest !== undefined)) {
         throw apiError_('bad_payload', 'An expense only has an amount, a payment type and a comment');
@@ -870,6 +995,155 @@ var UIAPI = (function () {
       }
       return already ? { already: true } : {};
     },
+    /**
+     * A partner bill, as the old Create Bill button: chosen lines get their cost (L) and the
+     * bill id in S; cost changes are emailed to the alerts address, the bill PDF to the author
+     * and the Gili Meno address.
+     */
+    partner_bill: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var bill = String(p.bill || '');
+      if (!BILL_RE.test(bill)) throw apiError_('bad_payload', 'Invalid bill id');
+      var items = Array.isArray(p.items) ? p.items : [];
+      if (!items.length || items.length > 300) throw apiError_('bad_payload', 'A bill needs 1 to 300 lines');
+      var set = {};
+      partnerItems_().forEach(function (it) { set[it.object] = true; });
+      var ent = entries_(), man = manual_();
+      var mine = {}, changes = [], rows = [];
+      items.forEach(function (it) {
+        var ts = String(it.ts);
+        if (mine[ts]) throw apiError_('bad_payload', 'Duplicate line');
+        mine[ts] = true;
+        var r = ent.row(ts);
+        if (!r) throw apiError_('line_not_found', 'A line of this bill is no longer in the sheet');
+        if (!isPartnerSale_(r, set)) throw apiError_('bad_payload', String(r[E.obj]) + ' is not a partner sale');
+        var st = String(r[E.status] || '').trim();
+        if (st !== '' && st !== bill) throw apiError_('already_billed', String(r[E.obj]) + ' for ' + r[E.guest] + ' is already on ' + st);
+        var cost = amount_(it.cost, 'cost');
+        if (st === '' && cost !== costOf_(r)) changes.push({ ts: ts, object: String(r[E.obj]), guest: String(r[E.guest]), before: costOf_(r), after: cost, author: String(r[E.author]) });
+        rows.push({ ts: ts, cost: cost });
+      });
+      ent.rows.forEach(function (r) {
+        if (String(r[E.status] || '').trim() === bill && !mine[String(r[E.ts])]) throw apiError_('bill_exists', 'Another bill already has the id ' + bill + '; try again in a minute');
+      });
+      var already = rows.every(function (x) { return String(ent.row(x.ts)[E.status] || '').trim() === bill; });
+      // The cost changes are mailed before anything is written: a retry still knows the old costs.
+      var author = me.author || me.username, when = fmt_(at, 'dd/MM/yyyy HH:mm');
+      var warn = [];
+      if (changes.length) {
+        warn.push(mailOnce_(op, 'cost', { to: [MAIL.alerts], subject: 'Modification data Partner in entries',
+          html: '<p>Cost changed by ' + author + ' while making bill ' + bill + ':</p><ul>' + changes.map(function (c) {
+            return '<li>' + htmlEsc_(c.object) + ' — ' + htmlEsc_(c.guest) + ' (' + c.ts + '): ' + c.before + ' → ' + c.after + ' (sold by ' + htmlEsc_(c.author) + ')</li>';
+          }).join('') + '</ul>' }));
+      }
+      rows.forEach(function (x) {
+        (ent.all[x.ts] || []).forEach(function (n) {
+          verify_(ent.sheet, n, E.ts + 1, x.ts);
+          ent.sheet.getRange(n, E.realCost + 1).setValue(x.cost);
+          ent.sheet.getRange(n, E.status + 1).setValue(bill);
+          ent.rows[n - 2][E.realCost] = x.cost; ent.rows[n - 2][E.status] = bill;
+        });
+        (man.all[x.ts] || []).forEach(function (n) { verify_(man.sheet, n, M.ts + 1, x.ts); man.sheet.getRange(n, M.realCost + 1).setValue(x.cost); });
+      });
+      var billRows = rows.map(function (x) { return ent.row(x.ts); });
+      var objects = billRows.map(function (r) { return String(r[E.obj]).trim(); }).filter(function (o, i, a) { return a.indexOf(o) === i; });
+      warn.push(mailOnce_(op, 'bill', { to: [author, MAIL.bills], subject: 'Bill (' + objects.join(', ') + ') - Created by ' + author + ' on ' + when,
+        body: 'Please find the attached bill.', pdf: billHtml_('Bill', author, when, billRows), pdfName: 'Bill_' + bill.replace(/[\/:]/g, '-') + '.pdf' }));
+      warn = warn.filter(String).join(' ');
+      return { bill: bill, lines: rows.length, audit: { changes: changes }, already: already || undefined, warning: warn || undefined };
+    },
+    /** Delete a bill that is not paid: its lines go back to "not billed" (costs stay, like the old Delete). */
+    partner_bill_delete: function (op, me) {
+      var p = op.payload || {};
+      parseAt_(op.at);
+      var bill = String(p.bill || '');
+      if (!BILL_RE.test(bill)) throw apiError_('bad_payload', 'Invalid bill id');
+      var ent = entries_();
+      var first = ent.rows.filter(function (r) { return String(r[E.status] || '').trim() === bill; }).map(function (r) { return String(r[E.ts]); }).sort()[0];
+      if (first && ent.rows.some(function (r) { return String(r[E.comment]) === bill && String(r[E.status]) === 'Settled' && String(r[E.ts]) > first; })) {
+        throw apiError_('bill_paid', 'This bill is already being paid; ask a manager');
+      }
+      var n = 0;
+      ent.rows.forEach(function (r, i) {
+        if (String(r[E.status] || '').trim() !== bill) return;
+        verify_(ent.sheet, i + 2, E.ts + 1, String(r[E.ts]));
+        ent.sheet.getRange(i + 2, E.status + 1).setValue('');
+        n++;
+      });
+      return n ? { lines: n } : { already: true };
+    },
+    /**
+     * "This Bill is Paid!": one payment row per partner object with the net amount (Expense
+     * "Payment to Partner" when we pay, Income "Payment From Partner" when the partner pays us),
+     * S "Settled", Q the bill id; then the bill's lines get S "Paid". The amounts are recomputed
+     * here and must equal what the person confirmed on screen.
+     */
+    partner_settle: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var bill = String(p.bill || '');
+      if (!BILL_RE.test(bill)) throw apiError_('bad_payload', 'Invalid bill id');
+      var pay = payment_(p.payment, false);
+      if (pay === PAID_TO_PARTNER) throw apiError_('bad_payment', 'Choose how the partner is paid');
+      assertCashRight_(me);
+      var want = {};
+      (Array.isArray(p.rows) ? p.rows : []).forEach(function (r) { want[String(r.object).trim()] = { ts: lineTs_(r.ts, at), net: Math.round(Number(r.net)) }; });
+      var ent = entries_(), man = manual_();
+      var lines = billLines_(ent, bill);
+      // Payment rows of this very operation already written: a previous attempt got that far.
+      var resumed = Object.keys(want).length && Object.keys(want).every(function (o) {
+        var x = ent.row(want[o].ts);
+        return want[o].net === 0 || (x && String(x[E.comment]) === bill && String(x[E.status]) === 'Settled');
+      }) && Object.keys(want).some(function (o) { return want[o].net !== 0; });
+      if (!lines.length) {
+        if (resumed || (Object.keys(want).length && Object.keys(want).every(function (o) { return want[o].net === 0; }) &&
+            !ent.rows.some(function (r) { return String(r[E.status] || '').trim() === bill; }))) return { already: true };
+        throw apiError_('line_not_found', 'This bill is no longer in the sheet');
+      }
+      var net = {};
+      lines.forEach(function (r) { var o = String(r[E.obj]).trim(); net[o] = (net[o] || 0) + billNet_(r); });
+      var objs = resumed ? Object.keys(want) : Object.keys(net);
+      if (!resumed && (objs.length !== Object.keys(want).length || objs.some(function (o) { return !want[o] || want[o].net !== Math.round(net[o]); }))) {
+        throw apiError_('bill_changed', 'The bill changed since it was shown (amounts: ' + objs.map(function (o) { return o + ' ' + Math.round(net[o]); }).join(', ') + '). Open it again.');
+      }
+      var author = me.author || me.username, day = dateOnly_(at), out = [];
+      objs.forEach(function (o) {
+        var n = resumed ? want[o].net : Math.round(net[o]), ts = want[o].ts;
+        if (n === 0) return;
+        var toPartner = n > 0;
+        var row = [day, toPartner ? 'Expense' : 'Income', partnerCategory_(o), o, '', '', '', toPartner ? '' : -n, author, '', '',
+          toPartner ? n : '', toPartner ? PAY_TO : PAY_FROM, pay, ts, '', bill];
+        var ex = ent.row(ts);
+        if (ex && (String(ex[E.obj]).trim() !== o || String(ex[E.comment]) !== bill)) throw apiError_('ts_collision', 'The sheet already has a different line with this id. Nothing was written.');
+        if (!ex) {
+          appendEntries_(ent, [row]);
+          ent.sheet.getRange(ent.last, E.status + 1).setValue('Settled');
+          ent.byTs[ts] = ent.last; ent.all[ts] = [ent.last]; row[E.status] = 'Settled'; ent.rows.push(row);
+        } else if (String(ex[E.status]) !== 'Settled') {
+          ent.sheet.getRange(ent.byTs[ts], E.status + 1).setValue('Settled');
+        }
+        if (!man.byTs[ts]) appendManual_(man, [row], [toPartner ? 'To agent' : 'From agent']);
+        out.push({ object: o, ts: ts, net: n });
+      });
+      var ng = ss_().getSheetByName(SHEETS.newGuest);
+      if (ng) {
+        var last = lastRowIn_(ng, 6, 1), have = last >= 1 ? ng.getRange(1, 6, last, 1).getValues().map(function (r) { return String(r[0]); }) : [];
+        [PAY_TO, PAY_FROM].forEach(function (m) { if (have.indexOf(m) < 0 && out.some(function (x) { return (x.net > 0) === (m === PAY_TO); })) { ng.getRange(++last, 6).setValue(m); have.push(m); } });
+      }
+      var when = fmt_(at, 'dd/MM/yyyy HH:mm');
+      var warn = mailOnce_(op, 'settle', { to: [author, MAIL.bills, MAIL.alerts], subject: 'BillSettlement (' + objs.join(', ') + ') - Created by ' + author + ' on ' + when,
+        body: 'Bill ' + bill + ' paid: ' + out.map(function (x) { return x.object + ' ' + x.net; }).join(', ') + ' (' + pay + ').',
+        pdf: billHtml_('BillSettlement', author, when, lines), pdfName: 'Billsettled_' + bill.replace(/[\/:]/g, '-') + '.pdf' });
+      // Every row carrying the bill id becomes Paid in one write per block (the old rows included).
+      var col = ent.sheet.getRange(2, E.status + 1, ent.rows.length, 1);
+      var st = col.getValues(), touched = false;
+      ent.rows.forEach(function (r, i) {
+        if (String(r[E.status] || '').trim() === bill && String(st[i][0]).trim() === bill) { st[i][0] = 'Paid'; touched = true; }
+      });
+      if (touched) col.setValues(st);
+      return { rows: out, warning: warn || undefined };
+    },
     shift_open: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
@@ -1007,9 +1281,11 @@ var UIAPI = (function () {
         }
         var vBefore = version_();
         log.appendRow([new Date(), id, String(body.deviceId || ''), who, String(op.type),
-          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs || op.payload.pid) || ''), String(op.at || ''), status, detail,
+          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs || op.payload.pid || op.payload.bill) || ''), String(op.at || ''), status, detail,
           JSON.stringify(op.payload || {}).slice(0, 45000)]);
-        PropertiesService.getScriptProperties().setProperty('UI_V', String(vBefore + 1));
+        var props_ = PropertiesService.getScriptProperties();
+        props_.setProperty('UI_V', String(vBefore + 1));
+        MAIL_KINDS.forEach(function (k) { if (props_.getProperty('UI_MAIL_' + id + '_' + k)) props_.deleteProperty('UI_MAIL_' + id + '_' + k); });
         seen[id] = { status: status, detail: detail };
         var out = { id: id, status: status };
         Object.keys(res || {}).forEach(function (key) { out[key] = res[key]; });

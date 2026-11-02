@@ -3,8 +3,8 @@ import { CONFIG } from './config.js';
 import { login, logout, currentUser, isRegistered } from './auth.js';
 import { startSync, onStatus, pushNow, pullNow, dismissRejected } from './sync.js';
 import { currentShift, cashInBoxBeforeOpening, expectedCash, cashMovements, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
-import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy } from './work.js';
-const cartBusy = ui => saleBusy(ui) || expenseBusy(ui) || cashBusy(ui);
+import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy, partnerBusy } from './work.js';
+const cartBusy = ui => saleBusy(ui) || expenseBusy(ui) || cashBusy(ui) || partnerBusy(ui);
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -163,7 +163,7 @@ async function renderShift() {
   const expected = await expectedCash(shift);
   const { phantom } = await cashMovements(shift);
   const wt = await workTabs({ ui, user: ui.user, shift });
-  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
+  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['partners', 'Partners', wt.counts.partners], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
   html += `<section class="card shift">
     <div class="shifthead">
       <h2>${mine ? 'Your shift' : `${esc(shift.userName && shift.userName !== shift.user ? shift.userName : nameOf(shift.user))}'s shift`}</h2>
@@ -179,10 +179,15 @@ async function renderShift() {
   </section>`;
 
   if (ui.tab !== 'close') {
+    // Built off-screen first, so the tab never shows empty while its data loads.
+    const work = document.createElement('div');
+    work.id = 'work';
+    await renderWork(work, { ui, user: ui.user, shift, render });
     main().innerHTML = html + '<div id="work"></div>' + attention(rejected);
+    $('#work').replaceWith(work);
     bindTabs();
-    await renderWork($('#work'), { ui, user: ui.user, shift, render });
     bindAttention();
+    (work.querySelector('[autofocus]'))?.focus();
     return;
   }
 
@@ -254,7 +259,7 @@ async function renderShift() {
 
 function bindTabs() {
   main().querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
-    ui.tab = b.dataset.tab; ui.closing = null; ui.editing = ui.deleting = ui.refunding = ui.solving = null; ui.supplyConfirm = false;
+    ui.tab = b.dataset.tab; ui.closing = null; ui.editing = ui.deleting = ui.refunding = ui.solving = null; ui.supplyConfirm = false; ui.billPay = ui.billDel = ui.billPayType = null;
     if (!expenseBusy(ui)) ui.expense = null;
     render();
   });
@@ -301,7 +306,7 @@ async function renderNow() {
   $('#logout').onclick = async () => {
     $('#logout').disabled = true;
     if (ui.user.role !== 'staff') await pushNow(); // send what is waiting before the manager session goes
-    await logout(ui.user); ui.user = null; ui.closing = null; ui.cart = null; ui.expense = ui.phantom = ui.supply = ui.solving = null; ui.supplyConfirm = false; ui.tab = 'sell'; ui.billGuest = null; noticeShown = null; render(); };
+    await logout(ui.user); ui.user = null; ui.closing = null; ui.cart = null; ui.expense = ui.phantom = ui.supply = ui.solving = ui.partner = ui.billOpen = ui.billPay = ui.billDel = null; ui.supplyConfirm = false; ui.tab = 'sell'; ui.billGuest = null; noticeShown = null; render(); };
   const shiftOpen = !!(await currentShift());
   main().classList.toggle('wide', shiftOpen);
   await renderShift();

@@ -1,6 +1,6 @@
 import { db } from './db.js';
 import { enqueue } from './sync.js';
-import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash } from './ledger.js';
+import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash, partnerView, billNet, tsFromMs } from './ledger.js';
 import { money, parseMoney } from './shift.js';
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
@@ -51,7 +51,9 @@ export async function workTabs(ctx) {
   const mine = shiftLines(d.lines, ctx.shift);
   const t = totals(mine);
   const open = (await cashboxView()).filter(e => e.type === 'Phantom').length;
-  return { counts: { bills: d.unpaid.size, shift: mine.length, cash: open,
+  const pv = await partnerView();
+  const bills = new Set(pv.lines.filter(l => l.bill).map(l => l.bill)).size;
+  return { counts: { bills: d.unpaid.size, shift: mine.length, cash: open, partners: bills,
     expenses: mine.filter(l => l.type === 'Expense' && l.comment !== 'Refunding' && l.object !== 'Cash Supply').length }, totals: t };
 }
 
@@ -63,6 +65,7 @@ export async function renderWork(root, ctx) {
   else if (tab === 'shift') renderShiftLines(root, d);
   else if (tab === 'expenses') renderExpenses(root, d);
   else if (tab === 'cash') await renderCash(root, d);
+  else if (tab === 'partners') await renderPartners(root, d);
 }
 
 // ---------------------------------------------------------------- sell
@@ -250,8 +253,8 @@ function lineRow(l, d, { showDay = false } = {}) {
       <p class="error" role="alert"></p></form>`;
   } else if (ui.editing === l.ts) {
     extra = `<form class="inline" data-editform="${esc(l.ts)}">
-      <label>Qty <input name="qty" inputmode="decimal" value="${esc(l.qty ?? '')}"${l.qty == null ? ' placeholder="—"' : ''}></label>
-      <label>Price per unit <span class="moneyin"><span class="cur">Rp</span><input name="unit" inputmode="numeric" value="${money(l.unit || 0)}"></span></label>
+      <label>Qty <input name="qty" inputmode="decimal" value="${esc(l.qty ?? '')}"${l.qty == null ? ' placeholder="—"' : ''}${l.bill ? ' disabled title="On a partner bill"' : ''}></label>
+      <label>Price per unit <span class="moneyin"><span class="cur">Rp</span><input name="unit" inputmode="numeric" value="${money(l.unit || 0)}"${l.bill ? ' disabled title="On a partner bill"' : ''}></span></label>
       <label>Payment <select name="payment">${[...new Set([l.payment, ...d.payments])].map(p => `<option${p === l.payment ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <label>Guest <input name="guest" value="${esc(l.guest)}"></label>
       <label class="grow">Comment <input name="comment" value="${esc(l.comment === 'Refunded' ? '' : l.comment)}"${l.comment === 'Refunded' ? ' disabled' : ''}></label>
@@ -325,12 +328,13 @@ function bindLineActions(root, d) {
       const qty = qtyText === '' ? null : Math.round(Number(qtyText.replace(',', '.')) * 100) / 100;
       const unit = parseMoney(f.unit.value);
       const guest = f.guest.value.replace(/\s+/g, ' ').trim();
-      if (qty !== null && !(qty > 0 && qty <= 1000)) { err.textContent = 'Enter a quantity above 0 and up to 1000.'; return; }
-      if (!unit || unit > 1e9) { err.textContent = 'Enter the price.'; return; }
+      const fixed = !!l.bill; // on a partner bill: quantity and price stay as billed
+      if (!fixed && qty !== null && !(qty > 0 && qty <= 1000)) { err.textContent = 'Enter a quantity above 0 and up to 1000.'; return; }
+      if (!fixed && (!unit || unit > 1e9)) { err.textContent = 'Enter the price.'; return; }
       if (!guest) { err.textContent = 'Enter the guest.'; return; }
       const change = {};
-      if (qty !== null && qty !== l.qty) change.qty = qty;
-      if (unit !== l.unit) change.unit = unit;
+      if (!fixed && qty !== null && qty !== l.qty) change.qty = qty;
+      if (!fixed && unit !== l.unit) change.unit = unit;
       if (f.payment.value !== l.payment) change.payment = f.payment.value;
       if (guest !== l.guest) change.guest = guest;
       if (!f.comment.disabled && f.comment.value.trim() !== (l.comment || '')) change.comment = f.comment.value.trim();
@@ -687,3 +691,180 @@ async function renderCash(root, d) {
 }
 
 export const cashBusy = ui => !!((ui.phantom && (ui.phantom.amount || ui.phantom.comment)) || (ui.supply && ui.supply.amount) || ui.solving);
+
+// ---------------------------------------------------------------- partners
+// The old partner dialogs: pick a partner, tick its sales not billed yet, check the costs,
+// create the bill (sent as PDF by the sheet); later "Paid" records the payment to (or from)
+// the partner, or the bill is deleted and its lines go back to "not billed".
+const shortDate = iso => { if (!iso) return ''; const x = new Date(new Date(iso).getTime() + 8 * 3600000); return `${String(x.getUTCDate()).padStart(2, '0')}/${String(x.getUTCMonth() + 1).padStart(2, '0')}`; };
+const partnerName = o => o.replace(/^-/, '');
+/** Bill id in the old format, B_dd/MM-HH:mm (reception time), moved on a minute if already used. */
+function newBillId(used) {
+  let ms = Date.now();
+  for (;;) {
+    const t = tsFromMs(ms);
+    const id = `B_${t.slice(6, 8)}/${t.slice(4, 6)}-${t.slice(8, 10)}:${t.slice(10, 12)}`;
+    if (!used.has(id)) return id;
+    ms += 60000;
+  }
+}
+function billSections(lines) {
+  return [['Paid at the Rabbit Tree', lines.filter(l => l.payment !== 'Paid to Partner')],
+    ['Paid by the guest to the partner', lines.filter(l => l.payment === 'Paid to Partner')]].filter(x => x[1].length);
+}
+
+async function renderPartners(root, d) {
+  const { ui } = d;
+  const pv = await partnerView();
+  const allowed = d.user.role !== 'staff' || (d.shift && d.shift.user === d.user.username);
+  const pending = pv.lines.filter(l => !l.bill);
+  const byObj = new Map();
+  for (const l of pending) byObj.set(l.object, (byObj.get(l.object) || 0) + 1);
+  const groups = new Map();
+  for (const it of pv.items) { if (!groups.has(it.group)) groups.set(it.group, []); groups.get(it.group).push(it.object); }
+  const bills = new Map();
+  for (const l of pv.lines) if (l.bill) { if (!bills.has(l.bill)) bills.set(l.bill, []); bills.get(l.bill).push(l); }
+  const pt = ui.partner = ui.partner || { object: null, sel: null, cost: {}, confirm: false };
+  if (ui.billOpen && !bills.has(ui.billOpen)) ui.billOpen = null;
+  if (pt.object && !byObj.has(pt.object)) { pt.object = null; pt.sel = null; }
+  const lines = pt.object ? pending.filter(l => l.object === pt.object) : [];
+  if (pt.object && !pt.sel) pt.sel = new Set(lines.map(l => l.ts));
+  const costOf = l => (l.ts in pt.cost ? pt.cost[l.ts] : l.cost); // null while the box is empty
+  const chosen = lines.filter(l => pt.sel && pt.sel.has(l.ts));
+  const total = chosen.reduce((s, l) => s + billNet({ ...l, cost: costOf(l) || 0 }), 0);
+  const missing = chosen.some(l => costOf(l) === null);
+  const payTypes = d.payments.filter(p => p !== 'Unpaid' && p !== 'Paid to Partner');
+  const lineTable = (ls, editable) => billSections(ls).map(([title, sec]) => `<h4 class="sub">${title}</h4>
+    <ul class="plines">${sec.map(l => `<li>
+      ${editable ? `<input type="checkbox" data-psel="${esc(l.ts)}"${pt.sel.has(l.ts) ? ' checked' : ''} aria-label="Include ${esc(l.guest)}">` : '<span></span>'}
+      <span class="when">${esc(shortDate(l.date))}</span>
+      <span class="what"><b>${esc(l.guest)}</b><span class="who">${l.qty && l.qty !== 1 ? `×${esc(l.qty)} · ` : ''}sold ${money(l.price)}${l.payment === 'Paid to Partner' ? ' · guest paid the partner' : ''}${l.pending ? ' · <span class="badge wait">Waiting</span>' : ''}</span></span>
+      ${editable ? `<label class="pcost"><span>Cost</span><span class="moneyin"><span class="cur">Rp</span><input inputmode="numeric" data-pcost="${esc(l.ts)}" value="${money(costOf(l))}"></span></label>`
+        : `<span class="num">${money(l.cost)}</span>`}
+      <span class="amt num">${billNet({ ...l, cost: costOf(l) }) < 0 ? '−' : ''}${money(Math.abs(billNet({ ...l, cost: costOf(l) })))}</span>
+    </li>`).join('')}</ul>`).join('');
+  const billTotal = ls => ls.reduce((s, l) => s + billNet(l), 0);
+  const owe = t => t >= 0 ? `We pay Rp ${money(t)}` : `Partner pays us Rp ${money(-t)}`;
+
+  root.innerHTML = `<div class="partners">
+    <section class="card plist">
+      <h2>Partners</h2>
+      ${[...groups].map(([g, objs]) => `<h3 class="sub">${esc(g)}</h3><div class="pbtns">${objs.map(o => `<button type="button" class="pbtn${pt.object === o ? ' on' : ''}" data-pobj="${esc(o)}"${byObj.has(o) ? '' : ' disabled'}>
+        <span>${esc(partnerName(o))}</span>${byObj.has(o) ? `<span class="count">${byObj.get(o)}</span>` : ''}</button>`).join('')}</div>`).join('')}
+    </section>
+    <div class="col">
+      <section class="card">
+        ${pt.object ? `<h2>${esc(partnerName(pt.object))} — not billed yet</h2>
+          <div class="row"><button class="link" type="button" data-pall>Select all</button><button class="link" type="button" data-pnone>Unselect all</button></div>
+          ${lineTable(lines, true)}
+          <div class="ctotal"><span>${chosen.length} line${chosen.length === 1 ? '' : 's'} · ${total >= 0 ? 'we owe the partner' : 'the partner owes us'}</span><b class="num">Rp ${money(Math.abs(total))}</b></div>
+          ${pt.confirm ? `<div class="inline warn"><span>Create the bill for ${esc(partnerName(pt.object))}: ${chosen.length} line${chosen.length === 1 ? '' : 's'}, ${esc(owe(total))}? The PDF is emailed as before.</span>
+            <button class="primary small" type="button" data-pcreate>Create bill</button><button class="ghost small" type="button" data-pcancel>Cancel</button></div>`
+            : `<button class="primary wide" type="button" data-preview${chosen.length ? '' : ' disabled'}>Create bill</button>`}
+          <p class="error" role="alert"></p>`
+        : '<h2>Choose a partner</h2><p class="muted">Partners with sales not billed yet have a number.</p>'}
+      </section>
+      <section class="card">
+        <h2>Bills waiting for payment</h2>
+        ${bills.size ? `<ul class="billlist">${[...bills].sort((a, b) => (a[1][0].ts < b[1][0].ts ? -1 : 1)).map(([id, ls]) => {
+          const t = billTotal(ls), objs = [...new Set(ls.map(l => partnerName(l.object)))].join(', '), open = ui.billOpen === id;
+          return `<li class="${open ? 'open' : ''}">
+            <button type="button" class="billhead" data-bopen="${esc(id)}" aria-expanded="${open}"><span><b>${esc(objs)}</b><span class="who">${esc(id)} · ${ls.length} line${ls.length === 1 ? '' : 's'}${ls.some(l => l.pending) ? ' · waiting' : ''}</span></span><span class="num">${esc(owe(t))}</span></button>
+            ${open ? `<div class="billbody">${lineTable(ls, false)}
+              ${ui.billPay === id ? `<div class="inline warn"><span>${esc(owe(t))} — paid with:</span>
+                <div class="pays">${payTypes.map(p => `<button type="button" class="pay${ui.billPayType === p ? ' on' : ''}" data-bptype="${esc(p)}">${esc(payLabel(p))}</button>`).join('')}</div>
+                <button class="primary small" type="button" data-bpaid="${esc(id)}"${ui.billPayType ? '' : ' disabled'}>Confirm payment</button><button class="ghost small" type="button" data-bcancel>Cancel</button></div>`
+              : ui.billDel === id ? `<div class="inline warn"><span>Delete this bill? Its lines go back to “not billed”.</span>
+                <button class="danger small" type="button" data-bdelok="${esc(id)}">Delete bill</button><button class="ghost small" type="button" data-bcancel>Keep</button></div>`
+              : `<div class="row">${allowed ? `<button class="primary small" type="button" data-bpay="${esc(id)}"${ls.some(l => l.pending) ? ' disabled title="Wait until the bill is in the sheet"' : ''}>Paid…</button>` : ''}
+                  <button class="ghost small" type="button" data-bprint="${esc(id)}">Print</button>
+                  <button class="link" type="button" data-bdel="${esc(id)}">Delete bill</button></div>`}
+            </div>` : ''}
+          </li>`;
+        }).join('')}</ul>` : '<p class="muted">No bill waiting.</p>'}
+      </section>
+    </div>
+  </div>`;
+
+  const err = root.querySelector('.error');
+  root.addEventListener('input', e => {
+    const t = e.target;
+    if (t.dataset.pcost) { const v = parseMoney(t.value); t.value = v === null ? '' : money(v); pt.cost[t.dataset.pcost] = v; pt.confirm = false; }
+  });
+  root.addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.psel) { if (t.checked) pt.sel.add(t.dataset.psel); else pt.sel.delete(t.dataset.psel); pt.confirm = false; d.render(); }
+    else if (t.dataset.pcost) d.render();
+  });
+  root.addEventListener('click', async e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.pobj) { ui.partner = { object: b.dataset.pobj, sel: null, cost: {}, confirm: false }; d.render(); }
+    else if (b.dataset.pall !== undefined) { pt.sel = new Set(lines.map(l => l.ts)); d.render(); }
+    else if (b.dataset.pnone !== undefined) { pt.sel = new Set(); d.render(); }
+    else if (b.dataset.preview !== undefined) {
+      if (missing) { err.textContent = 'Enter the cost of every ticked line.'; return; }
+      pt.confirm = true; d.render();
+    }
+    else if (b.dataset.pcancel !== undefined) { pt.confirm = false; d.render(); }
+    else if (b.dataset.pcreate !== undefined) {
+      if (missing) { err.textContent = 'Enter the cost of every ticked line.'; return; }
+      b.disabled = true;
+      const bill = newBillId(new Set(pv.lines.map(l => l.bill).filter(Boolean)));
+      await enqueue('partner_bill', { bill, items: chosen.map(l => ({ ts: l.ts, cost: costOf(l) })) });
+      ui.notice = `Bill created for ${partnerName(pt.object)}: ${owe(total)}. The PDF is emailed by the sheet.`;
+      ui.partner = null; ui.billOpen = bill;
+      d.render();
+    }
+    else if (b.dataset.bopen) { ui.billOpen = ui.billOpen === b.dataset.bopen ? null : b.dataset.bopen; ui.billPay = ui.billDel = ui.billPayType = null; d.render(); }
+    else if (b.dataset.bpay) { ui.billPay = b.dataset.bpay; ui.billPayType = null; d.render(); }
+    else if (b.dataset.bptype) { ui.billPayType = b.dataset.bptype; d.render(); }
+    else if (b.dataset.bdel) { ui.billDel = b.dataset.bdel; d.render(); }
+    else if (b.dataset.bcancel !== undefined) { ui.billPay = ui.billDel = ui.billPayType = null; d.render(); }
+    else if (b.dataset.bdelok) {
+      b.disabled = true;
+      await enqueue('partner_bill_delete', { bill: b.dataset.bdelok });
+      ui.notice = `Bill ${b.dataset.bdelok} deleted; its lines are back in “not billed”.`;
+      ui.billDel = null; ui.billOpen = null;
+      d.render();
+    }
+    else if (b.dataset.bpaid) {
+      b.disabled = true;
+      const id = b.dataset.bpaid, ls = bills.get(id);
+      const nets = new Map();
+      for (const l of ls) nets.set(l.object, (nets.get(l.object) || 0) + billNet(l));
+      const rows = [];
+      for (const [object, net] of nets) rows.push({ object, ts: await nextTs(), net });
+      await enqueue('partner_settle', { bill: id, payment: ui.billPayType, rows });
+      ui.notice = `Bill ${id} paid: ${owe(billTotal(ls))}, ${payLabel(ui.billPayType)}.`;
+      ui.billPay = ui.billPayType = null; ui.billOpen = null;
+      d.render();
+    }
+    else if (b.dataset.bprint) printBill(b.dataset.bprint, bills.get(b.dataset.bprint), d.user);
+  });
+}
+
+/** The bill as the old PDF laid it out, printed from the browser. */
+function printBill(id, ls, user) {
+  const objs = [...new Set(ls.map(l => l.object))];
+  let invoiced = 0;
+  const body = objs.map(o => {
+    let cat = 0;
+    const secs = billSections(ls.filter(l => l.object === o)).map(([title, sec]) => {
+      const sub = sec.reduce((s, l) => s + billNet(l), 0); cat += sub;
+      return `<tr><th colspan="6"><i>${title}</i></th></tr><tr><th>Date</th><th>Qty</th><th>Cost</th><th>Price sold</th><th>Commission</th><th>Guest</th></tr>
+        ${sec.map(l => `<tr><td>${esc(shortDate(l.date))}</td><td>${esc(l.qty ?? '')}</td><td>${money(l.cost)}</td><td>${money(l.price)}</td><td>${l.payment === 'Paid to Partner' ? money(billNet(l)) : ''}</td><td>${esc(l.guest)}</td></tr>`).join('')}
+        <tr class="sub"><td colspan="6">${title === 'Paid at the Rabbit Tree' ? 'Total cost' : 'Total commission'}: ${money(sub)}</td></tr>`;
+    }).join('');
+    invoiced += cat;
+    return `<tr><th colspan="6">${esc(o)}</th></tr>${secs}<tr class="tot"><td colspan="6">Total of category: ${money(cat)}</td></tr>`;
+  }).join('');
+  let el = document.getElementById('printArea');
+  if (!el) { el = document.createElement('div'); el.id = 'printArea'; document.body.appendChild(el); }
+  el.innerHTML = `<h1>Bill (${esc(objs.join(', '))})</h1><p>${esc(id)} · printed by ${esc(user.name)}</p>
+    <table>${body}<tr class="inv"><td colspan="6">Total invoiced: Rp ${money(invoiced)}</td></tr></table>
+    <p><b><i>Best regards from The Rabbit Tree team!</i></b></p>`;
+  window.print();
+}
+
+export const partnerBusy = ui => ui.tab === 'partners' && !!((ui.partner && ui.partner.confirm) || ui.billPay || ui.billDel);

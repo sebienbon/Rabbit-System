@@ -24,6 +24,13 @@ function seedEnv() {
       ['Date', 'Category', 'Sub-category', 'object', 'Qty', 'Auto price per unit', 'Auto price', 'Real price (if different)', 'Author', 'Theorical cost per unit', 'Theorical cost', 'Real cost (if different)', 'Guest', 'Payment Type', 'Time stamp', 'month correction', 'Comment'],
       [new Date(Date.now() - 3 * 86400000), 'Income', 'Service', 'Laundry', 2, 30000, 60000, 60000, 'r2@x', '', 0, 0, 'Alice Example', 'Unpaid',
         new Date(Date.now() - 3 * 86400000 + 8 * 3600000).toISOString().replace(/\D/g, '').slice(0, 17), '', ''],
+      // Partner sales not settled: two horse rides (one paid by the guest to the partner) and a shuttle on an old bill.
+      ...[['-Horse Riding', 'Tour', 2, 800000, 700000, 'Ann', 'Cash', ''], ['-Horse Riding', 'Tour', 1, 400000, 350000, 'Ben', 'Paid to Partner', ''],
+        ['-Shuttle Bangsal / Kuta', 'Transport', 1, 160000, 90000, 'Cy', 'Cash', 'B_01/10-10:00']].map((x, i) => {
+        const ms = Date.now() - 5 * 86400000 + i * 1000;
+        return [new Date(ms), 'Income', x[1], x[0], x[2], x[3] / x[2], x[3], x[3], 'r2@x', x[4] / x[2], x[4], x[4], x[5], x[6],
+          new Date(ms + 8 * 3600000).toISOString().replace(/\D/g, '').slice(0, 17), '', '', '', x[7]];
+      }),
     ],
     '24datafeed': [['Guest Name', 'First Name', 'Full'], ['E', 'A', 'Alice Example']],
     'New guest': [['', '', '', '', '', 'Bob Sample']],

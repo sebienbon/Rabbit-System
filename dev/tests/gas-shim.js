@@ -76,6 +76,8 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
   const attach = sh => { sh.fmt = fmt; sh.tz = tz; return sh; };
   Object.values(book).forEach(attach);
   const props = {};
+  const mails = [];
+  const mailFail = { next: false };
   const ss = {
     getSpreadsheetTimeZone: () => tz,
     getSheetByName: n => book[n] || null,
@@ -95,6 +97,7 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       computeDigest: (alg, s) => Array.from(crypto.createHash(alg).update(s, 'utf8').digest()).map(b => (b > 127 ? b - 256 : b)),
       getUuid: () => crypto.randomUUID(), sleep() {}, formatDate: fmt,
+      newBlob: (data, type, name) => ({ data, type, name, getAs(t) { return { data, type: t, name, setName(n) { this.name = n; return this; } }; } }),
       // Only 'yyyy-MM-dd' is needed: midnight of that day in timezone _tz.
       parseDate: (s, _tz, pattern) => {
         let y, m, d, H = 0, M = 0, S = 0;
@@ -116,11 +119,12 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
     Logger: { log() {} },
+    MailApp: { sendEmail(m) { if (mailFail.next) { mailFail.next = false; throw new Error('Mail service failed (simulated)'); } mails.push(m); } },
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(__dirname + '/../server/30.UI_api.gs', 'utf8'), ctx);
   const call = body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text);
-  return { ctx, book, props, call };
+  return { ctx, book, props, call, mails, mailFail };
 }
 
 module.exports = { makeEnv };
