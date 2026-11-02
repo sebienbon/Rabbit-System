@@ -25,8 +25,10 @@ class Range {
     vals.forEach((row, i) => row.forEach((v, j) => this.sheet.set(this.r + i, this.c + j, v)));
     return this;
   }
+  /** Dates shown as dd/MM/yyyy in the sheet timezone, like the Cashouts&Cor date column. */
+  getDisplayValues() { return this.getValues().map(r => r.map(v => (v instanceof Date ? this.sheet.fmt(v, this.sheet.tz, 'dd/MM/yyyy') : String(v)))); }
   getFormulas() { return this.getValues().map(r => r.map(v => (typeof v === 'string' && v.startsWith('=') ? v : ''))); }
-  setValue(v) { this.sheet.set(this.r, this.c, v); return this; }
+  setValue(v) { this.sheet.maybeFail('setValue'); this.sheet.set(this.r, this.c, v); return this; }
   getValue() { return this.getValues()[0][0]; }
   setNumberFormat(f) { this.sheet.formats.push([this.r, this.c, f]); return this; }
   setFontWeight() { return this; }
@@ -36,7 +38,19 @@ class Sheet {
   constructor(name, rows) { this.name = name; this.data = (rows || []).map(r => r.slice()); this.formats = []; this.failNext = null; }
   /** Simulates a Google error ("Service timed out") on the next write of this kind. */
   maybeFail(kind) { if (this.failNext === kind) { this.failNext = null; throw new Error('Service Spreadsheets timed out (simulated)'); } }
-  set(r, c, v) { while (this.data.length < r) this.data.push([]); const row = this.data[r - 1]; while (row.length < c) row.push(''); row[c - 1] = v; }
+  // Sheets keeps text typed after an apostrophe, without it; textCells remembers it was text, not a formula.
+  set(r, c, v) {
+    while (this.data.length < r) this.data.push([]); const row = this.data[r - 1]; while (row.length < c) row.push('');
+    const isText = typeof v === 'string' && v.startsWith("'");
+    row[c - 1] = isText ? v.slice(1) : v;
+    (this.textCells = this.textCells || new Set())[isText ? 'add' : 'delete'](r + ',' + c);
+  }
+  /** What the cell holds: 'text' (typed after an apostrophe), 'formula' (a string starting with =, + or @ written as is), or 'value'. */
+  kind(r, c) {
+    const v = (this.data[r - 1] || [])[c - 1];
+    if (this.textCells && this.textCells.has(r + ',' + c)) return 'text';
+    return typeof v === 'string' && /^[=+@]/.test(v) ? 'formula' : 'value';
+  }
   getLastRow() {
     for (let i = this.data.length - 1; i >= 0; i--) if ((this.data[i] || []).some(v => v !== '' && v !== undefined && v !== null)) return i + 1;
     return 0;
@@ -59,11 +73,13 @@ class Sheet {
 function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
   const book = {};
   for (const [n, rows] of Object.entries(sheets)) book[n] = new Sheet(n, rows);
+  const attach = sh => { sh.fmt = fmt; sh.tz = tz; return sh; };
+  Object.values(book).forEach(attach);
   const props = {};
   const ss = {
     getSpreadsheetTimeZone: () => tz,
     getSheetByName: n => book[n] || null,
-    insertSheet: n => (book[n] = new Sheet(n, [])),
+    insertSheet: n => (book[n] = attach(new Sheet(n, []))),
   };
   function fmt(d, _tz, pattern) {
     const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: _tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
@@ -81,11 +97,16 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
       getUuid: () => crypto.randomUUID(), sleep() {}, formatDate: fmt,
       // Only 'yyyy-MM-dd' is needed: midnight of that day in timezone _tz.
       parseDate: (s, _tz, pattern) => {
-        if (pattern !== 'yyyy-MM-dd') throw new Error('shim parseDate pattern ' + pattern);
-        const [y, m, d] = s.split('-').map(Number);
-        const guess = new Date(Date.UTC(y, m - 1, d));
-        const shown = fmt(guess, _tz, 'yyyy-MM-dd HH:mm').split(/[- :]/).map(Number);
-        const offsetMin = (Date.UTC(shown[0], shown[1] - 1, shown[2], shown[3], shown[4]) - guess.getTime()) / 60000;
+        let y, m, d, H = 0, M = 0, S = 0;
+        if (pattern === 'yyyy-MM-dd') [y, m, d] = s.split('-').map(Number);
+        else if (pattern === 'dd/MM/yyyy HH:mm:ss') {
+          const x = s.match(/^(\d\d)\/(\d\d)\/(\d{4}) (\d\d):(\d\d):(\d\d)$/);
+          if (!x) throw new Error('Unparseable date: ' + s);
+          [d, m, y, H, M, S] = x.slice(1).map(Number);
+        } else throw new Error('shim parseDate pattern ' + pattern);
+        const guess = new Date(Date.UTC(y, m - 1, d, H, M, S));
+        const shown = fmt(guess, _tz, 'yyyy-MM-dd HH:mm:ss').split(/[- :]/).map(Number);
+        const offsetMin = (Date.UTC(shown[0], shown[1] - 1, shown[2], shown[3], shown[4], shown[5]) - guess.getTime()) / 60000;
         return new Date(guess.getTime() - offsetMin * 60000);
       },
     },

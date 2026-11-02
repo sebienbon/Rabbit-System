@@ -62,6 +62,12 @@ function openShift(env, token, id = 'S' + (++n)) {
 const entriesRows = env => env.book['Entries'].data.slice(1).filter(r => r[14]);
 const manualRows = env => env.book['Entries Manual'].data.slice(1).filter(r => r[16]);
 const findE = (env, ts) => env.book['Entries'].data.find(r => r[14] === ts);
+/** How a cell was stored, found by the line id in column tsCol (1-based). */
+const cellKind = (env, sheet, tsCol, ts, col) => {
+  const sh = env.book[sheet];
+  const r = sh.data.findIndex(row => row[tsCol - 1] === ts) + 1;
+  return sh.kind(r, col);
+};
 const findM = (env, ts) => env.book['Entries Manual'].data.find(r => r[16] === ts);
 
 function sale(guests, items, payment = 'Cash') {
@@ -171,7 +177,8 @@ test('sale: a guest name that looks like a formula is stored as text', () => {
   const t = login(env, 'ayu'); openShift(env, t);
   const s = sale(['=HYPERLINK("x")'], [{ object: 'Towel', qty: 1, unit: 1 }]);
   push(env, t, s);
-  assert.strictEqual(findE(env, s.payload.lines[0].ts)[12], '\'=HYPERLINK("x")');
+  assert.strictEqual(findE(env, s.payload.lines[0].ts)[12], '=HYPERLINK("x")');
+  assert.strictEqual(cellKind(env, 'Entries', 15, s.payload.lines[0].ts, 13), 'text');
 });
 
 test('sale while no shift is open is still recorded, with a warning in the log', () => {
@@ -516,7 +523,8 @@ test('review: a comment that looks like a formula survives a retry as text in En
   assert.ok(push(env, ayu, e1).partial);
   findE(env, e1.payload.ts)[16] = '+62 812 3456 (supplier)'; // what the sheet gives back: apostrophe gone
   assert.strictEqual(push(env, ayu, e1).results[0].status, 'applied');
-  assert.strictEqual(findM(env, e1.payload.ts)[15], "'+62 812 3456 (supplier)");
+  assert.strictEqual(findM(env, e1.payload.ts)[15], '+62 812 3456 (supplier)');
+  assert.strictEqual(cellKind(env, 'Entries Manual', 17, e1.payload.ts, 16), 'text');
   const m = findM(env, e1.payload.ts);
   assert.deepStrictEqual([m[5], m[6], m[9], m[10]], ['=f', '=g', '=j', '=k'], 'formulas of the row kept');
 });
@@ -548,4 +556,137 @@ test('review: expense dates are checked as calendar days', () => {
   const tomorrow = new Date(Date.now() + 86400000 + 8 * 3600000).toISOString().slice(0, 10);
   assert.strictEqual(push(env, ayu, expense('Restaurant', 1, 'Cash', { date: tomorrow })).results[0].error, 'bad_time');
   assert.strictEqual(push(env, ayu, expense('Restaurant', 1, 'Cash', { date: '2026-02-31' })).results[0].error, 'bad_time');
+});
+
+// ---------------------------------------------------------------- cash box (step 3b)
+const cashRows = env => env.book['Cashouts&Cor'].data.slice(1).filter(r => r[8]);
+const pid = () => 'P' + (++n) + 'abcdef';
+
+test('phantom: written like the old dialog (difference, cash in box chained, type Phantom) and counted at closing', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  const id = openShift(env, ayu); // box 100000
+  const p1 = op('phantom', { pid: pid(), notGiven: 20000, comment: 'change for room 3' });
+  const r = push(env, ayu, p1);
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  const row = cashRows(env).pop();
+  assert.strictEqual(row[3], 20000);
+  assert.strictEqual(row[4], 120000);
+  assert.strictEqual(row[6], 'r1@x');
+  assert.strictEqual(row[7], 'change for room 3 [' + p1.payload.pid + ']');
+  assert.strictEqual(row[8], 'Phantom');
+  push(env, ayu, op('phantom', { pid: pid(), notReceived: 5000, comment: 'guest pays tomorrow' }));
+  assert.strictEqual(cashRows(env).pop()[4], 115000);
+  // Opening 100000 + 20000 change kept − 5000 not received = 115000 expected.
+  const c = push(env, ayu, op('shift_close', { shiftId: id, cashCounted: 115000, expectedCash: 115000 }));
+  assert.strictEqual(c.results[0].expected, 115000);
+  assert.strictEqual(c.results[0].difference, 0);
+});
+
+test('phantom: one amount and a comment required; staff need their own open shift; replay writes once', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), boss = login(env, 'boss');
+  assert.strictEqual(push(env, ayu, op('phantom', { pid: pid(), notGiven: 1000, comment: 'x' })).results[0].error, 'forbidden');
+  openShift(env, ayu);
+  assert.strictEqual(push(env, ayu, op('phantom', { pid: pid(), notGiven: 1000, notReceived: 1000, comment: 'x' })).results[0].error, 'bad_amount');
+  assert.strictEqual(push(env, ayu, op('phantom', { pid: pid(), comment: 'x' })).results[0].error, 'bad_amount');
+  assert.strictEqual(push(env, ayu, op('phantom', { pid: pid(), notGiven: 1000, comment: '  ' })).results[0].error, 'bad_payload');
+  const dewa = login(env, 'dewa');
+  assert.strictEqual(push(env, dewa, op('phantom', { pid: pid(), notGiven: 1000, comment: 'x' })).results[0].error, 'forbidden');
+  const p = op('phantom', { pid: pid(), notGiven: 1000, comment: 'x' });
+  env.book['UI_Log'].failNext = 'appendRow';
+  assert.strictEqual(push(env, ayu, p).error, 'server_error', 'log write failed after the row was written');
+  assert.strictEqual(push(env, ayu, p).results[0].status, 'applied');
+  assert.strictEqual(cashRows(env).filter(r => String(r[7]).includes(p.payload.pid)).length, 1);
+  assert.strictEqual(push(env, boss, op('phantom', { pid: pid(), notReceived: 500, comment: 'boss' })).results[0].status, 'applied');
+});
+
+test('phantom solve: salvation row with the opposite difference, original marked solved, only once', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  openShift(env, ayu);
+  const p1 = op('phantom', { pid: pid(), notGiven: 20000, comment: 'change' });
+  push(env, ayu, p1);
+  const pulled = env.call({ action: 'pull', token: ayu }).cashbox;
+  const ph = pulled.find(c => c.pid === p1.payload.pid);
+  assert.ok(ph && ph.type === 'Phantom' && ph.diff === 20000 && ph.comment === 'change', JSON.stringify(pulled));
+  const s1 = op('phantom_solve', { pid: pid(), target: ph.key });
+  env.book['Cashouts&Cor'].failNext = 'setValue';
+  assert.ok(push(env, ayu, s1).partial, 'Google failure after the salvation row');
+  assert.strictEqual(push(env, ayu, s1).results[0].status, 'applied');
+  const rows = cashRows(env);
+  assert.strictEqual(rows.filter(r => r[8] === 'Phantom Salvation').length, 1);
+  const salv = rows.find(r => r[8] === 'Phantom Salvation');
+  assert.strictEqual(salv[3], -20000);
+  assert.strictEqual(salv[4], 100000);
+  assert.strictEqual(rows.find(r => String(r[7]).includes(p1.payload.pid))[8], 'Phantom Solved');
+  assert.strictEqual(push(env, ayu, op('phantom_solve', { pid: pid(), target: ph.key })).results[0].error, 'already_solved');
+});
+
+test('phantom solve: works on a phantom written by the old dialog (no tag)', () => {
+  const env = freshEnv();
+  const cash = env.book['Cashouts&Cor'];
+  cash.appendRow(['19/10/2026', '10:52:17', '', -25000, 75000, '', 'r2@x', 'kembalian water refill', 'Phantom']);
+  const ayu = login(env, 'ayu');
+  openShift(env, ayu); // reference box is now 75000
+  const ph = env.call({ action: 'pull', token: ayu }).cashbox.find(c => c.comment === 'kembalian water refill');
+  assert.ok(ph, 'unsolved phantoms are always sent, however old');
+  assert.match(ph.key, /^K20261019105217\|-25000\|r2@x$/);
+  assert.strictEqual(push(env, ayu, op('phantom_solve', { pid: pid(), target: ph.key })).results[0].status, 'applied');
+  assert.strictEqual(cash.data.find(r => r[7] === 'kembalian water refill')[8], 'Phantom Solved');
+  assert.strictEqual(cashRows(env).pop()[3], 25000);
+});
+
+test('cash supply: income Cash + expense Extern Cash like the old dialog, New guest column F once, not editable', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  const id = openShift(env, ayu);
+  const cs = op('cash_supply', { ts: newTs(), ts2: newTs(), amount: 500000 });
+  env.book['Entries Manual'].failNext = 'setValues';
+  assert.ok(push(env, ayu, cs).partial);
+  assert.strictEqual(push(env, ayu, cs).results[0].status, 'applied');
+  const inc = findE(env, cs.payload.ts), exp = findE(env, cs.payload.ts2);
+  assert.deepStrictEqual([inc[1], inc[2], inc[3], inc[7], inc[8], inc[12], inc[13]], ['Income', 'Other', 'Cash Supply', 500000, 'r1@x', 'Cash Supply', 'Cash']);
+  assert.deepStrictEqual([exp[1], exp[2], exp[3], exp[11], exp[12], exp[13]], ['Expense', 'Other', 'Cash Supply', 500000, 'Cash Supply', 'Extern Cash']);
+  assert.strictEqual(manualRows(env).filter(r => r[3] === 'Cash Supply').length, 2);
+  assert.strictEqual(findM(env, cs.payload.ts)[14], 'r1@x');
+  push(env, ayu, op('cash_supply', { ts: newTs(), ts2: newTs(), amount: 1000 }));
+  assert.strictEqual(env.book['New guest'].data.filter(r => r[5] === 'Cash Supply').length, 1);
+  assert.ok(!env.call({ action: 'pull', token: ayu }).guests.includes('Cash Supply'));
+  assert.strictEqual(push(env, login(env, 'boss'), op('line_update', { ts: cs.payload.ts, comment: 'x' })).results[0].error, 'bad_payload');
+  assert.strictEqual(push(env, ayu, op('line_delete', { ts: cs.payload.ts })).results[0].error, 'forbidden');
+  assert.strictEqual(push(env, ayu, op('refund', { origTs: cs.payload.ts, newTs: newTs(), amount: 1000, payment: 'Cash' })).results[0].error, 'bad_payload');
+  // The supply is cash put in the box: 100000 + 500000 + 1000.
+  const c = push(env, ayu, op('shift_close', { shiftId: id, cashCounted: 601000, expectedCash: 601000 }));
+  assert.strictEqual(c.results[0].difference, 0);
+});
+
+test('review: phantom comment like a phone number stays text; solving it writes a Salvation with no comment, once, even after a failure', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const p1 = op('phantom', { pid: pid(), notReceived: 30000, comment: '+62 812 3456 pays tonight' });
+  push(env, ayu, p1);
+  const cash = env.book['Cashouts&Cor'];
+  const r1 = cash.data.findIndex(r => String(r[7]).includes(p1.payload.pid)) + 1;
+  assert.strictEqual(cash.kind(r1, 8), 'text');
+  const ph = env.call({ action: 'pull', token: ayu }).cashbox.find(c => c.pid === p1.payload.pid);
+  assert.strictEqual(ph.comment, '+62 812 3456 pays tonight');
+  const s1 = op('phantom_solve', { pid: pid(), target: ph.key });
+  cash.failNext = 'setValue';
+  assert.ok(push(env, ayu, s1).partial);
+  assert.strictEqual(push(env, ayu, s1).results[0].status, 'applied');
+  const salv = cashRows(env).filter(r => r[8] === 'Phantom Salvation');
+  assert.strictEqual(salv.length, 1);
+  assert.strictEqual(salv[0][7], '[' + s1.payload.pid + ']');
+  assert.strictEqual(salv[0][3], 30000);
+});
+
+test('review: a solve reusing the phantom\'s own id is refused; a phantom whose row changed is not marked', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const p1 = op('phantom', { pid: pid(), notGiven: 1000, comment: 'a' });
+  push(env, ayu, p1);
+  assert.strictEqual(push(env, ayu, op('phantom_solve', { pid: p1.payload.pid, target: p1.payload.pid })).results[0].error, 'bad_payload');
+  assert.strictEqual(cashRows(env).find(r => String(r[7]).includes(p1.payload.pid))[8], 'Phantom');
+  assert.strictEqual(cashRows(env).filter(r => r[8] === 'Phantom Salvation').length, 0);
 });

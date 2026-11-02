@@ -1,6 +1,6 @@
 import { db } from './db.js';
 import { enqueue } from './sync.js';
-import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund } from './ledger.js';
+import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash } from './ledger.js';
 import { money, parseMoney } from './shift.js';
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
@@ -35,7 +35,7 @@ async function load(ctx) {
     ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests')]);
   const names = new Map();
   for (const g of guestList || []) names.set(norm(g), g);
-  for (const l of lines) if (l.guest && l.type === 'Income' && !names.has(norm(l.guest))) names.set(norm(l.guest), l.guest);
+  for (const l of lines) if (l.guest && l.type === 'Income' && l.object !== 'Cash Supply' && !names.has(norm(l.guest))) names.set(norm(l.guest), l.guest);
   const unpaid = new Map();
   for (const l of lines) if (l.type === 'Income' && l.payment === 'Unpaid') {
     const u = unpaid.get(l.guest) || { guest: l.guest, total: 0, count: 0, oldest: l.ts };
@@ -50,7 +50,9 @@ export async function workTabs(ctx) {
   const d = await load(ctx);
   const mine = shiftLines(d.lines, ctx.shift);
   const t = totals(mine);
-  return { counts: { bills: d.unpaid.size, shift: mine.length, expenses: mine.filter(l => l.type === 'Expense' && l.comment !== 'Refunding').length }, totals: t };
+  const open = (await cashboxView()).filter(e => e.type === 'Phantom').length;
+  return { counts: { bills: d.unpaid.size, shift: mine.length, cash: open,
+    expenses: mine.filter(l => l.type === 'Expense' && l.comment !== 'Refunding' && l.object !== 'Cash Supply').length }, totals: t };
 }
 
 export async function renderWork(root, ctx) {
@@ -60,6 +62,7 @@ export async function renderWork(root, ctx) {
   else if (tab === 'bills') renderBills(root, d);
   else if (tab === 'shift') renderShiftLines(root, d);
   else if (tab === 'expenses') renderExpenses(root, d);
+  else if (tab === 'cash') await renderCash(root, d);
 }
 
 // ---------------------------------------------------------------- sell
@@ -231,9 +234,10 @@ function renderSell(root, d) {
 function lineRow(l, d, { showDay = false } = {}) {
   const { ui } = d;
   const isExp = l.type === 'Expense';
-  const isSpend = isExp && l.comment !== 'Refunding'; // a daily expense, not a refund
+  const isSupply = l.object === 'Cash Supply';
+  const isSpend = isExp && l.comment !== 'Refunding' && !isSupply; // a daily expense, not a refund
   const amount = isExp ? -(l.cost || 0) : (l.total || 0);
-  const edit = canChange(l, d.user, d.shift) && (!isExp || isSpend); // refund lines: delete only
+  const edit = canChange(l, d.user, d.shift) && !isSupply && (!isExp || isSpend); // refund lines and cash supply: delete only
   const del = canChange(l, d.user, d.shift);
   const ref = canRefund(l);
   let extra = '';
@@ -254,7 +258,7 @@ function lineRow(l, d, { showDay = false } = {}) {
       <div class="row"><button class="primary small" type="submit">Save</button><button class="ghost small" type="button" data-cancel>Cancel</button></div>
       <p class="error" role="alert"></p></form>`;
   } else if (ui.deleting === l.ts) {
-    extra = `<div class="inline warn"><span>Delete this line from the sheet?</span>
+    extra = `<div class="inline warn"><span>${isSupply ? 'Delete this cash supply (both of its lines) from the sheet?' : 'Delete this line from the sheet?'}</span>
       <button class="danger small" type="button" data-delok="${esc(l.ts)}">Delete</button><button class="ghost small" type="button" data-cancel>Keep</button></div>`;
   } else if (ui.refunding === l.ts) {
     extra = `<form class="inline" data-refform="${esc(l.ts)}">
@@ -272,12 +276,18 @@ function lineRow(l, d, { showDay = false } = {}) {
   ].join('');
   return `<li class="line${isExp ? ' exp' : ''}${ui.editing === l.ts || ui.refunding === l.ts ? ' open' : ''}">
     <span class="when">${showDay ? lineDay(l.ts) + ' ' : ''}${lineTime(l.ts)}</span>
-    <span class="what"><b>${esc(isSpend ? expenseLabel(l.object) : l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${isSpend ? 'Expense' : esc(l.guest)}</span></span>
+    <span class="what"><b>${esc(isSpend ? expenseLabel(l.object) : l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${isSupply ? (isExp ? 'Taken from outside the desk' : 'Put in the box') : isSpend ? 'Expense' : esc(l.guest)}</span></span>
     <span class="tags">${tags}${status}</span>
     <span class="amt num">${amount < 0 ? '−' : ''}${money(Math.abs(amount))}</span>
     <span class="acts">${edit ? `<button class="link" type="button" data-edit="${esc(l.ts)}">Edit</button>` : ''}${del ? `<button class="link" type="button" data-del="${esc(l.ts)}">Delete</button>` : ''}${ref ? `<button class="link" type="button" data-refund="${esc(l.ts)}">Refund</button>` : ''}</span>
     ${l.comment && !['Refunded', 'Refunding'].includes(l.comment) ? `<span class="note">${esc(l.comment)}</span>` : ''}
     ${extra}</li>`;
+}
+
+/** The other line of a cash supply: same author, other side, recorded within the same second. */
+function supplyPartner(lines, l) {
+  return lines.find(x => x !== l && x.ts !== l.ts && x.object === 'Cash Supply' && x.type !== l.type && x.author === l.author &&
+    Math.abs(Number(x.ts.slice(8)) - Number(l.ts.slice(8))) < 1000 && x.ts.slice(0, 8) === l.ts.slice(0, 8));
 }
 
 /** Edit / delete / refund handlers shared by the bills and shift tabs. */
@@ -295,6 +305,9 @@ function bindLineActions(root, d) {
       b.disabled = true;
       const l = byTs(b.dataset.delok);
       await enqueue('line_delete', { ts: b.dataset.delok });
+      // A cash supply is two lines (Cash in, Extern Cash out): they go together.
+      const pair = l && l.object === 'Cash Supply' ? supplyPartner(d.lines, l) : null;
+      if (pair) await enqueue('line_delete', { ts: pair.ts });
       ui.deleting = null;
       ui.notice = !l ? 'Line deleted.' : l.type === 'Expense' ? `Deleted: ${expenseLabel(l.object)} expense of Rp ${money(l.cost)}.` : `Deleted: ${l.object.replace(/^-/, '')} for ${l.guest}.`;
       d.render();
@@ -475,7 +488,7 @@ function renderExpenses(root, d) {
   // date stays empty unless changed: "today" is decided when the expense is recorded.
   const ex = ui.expense = ui.expense || { item: null, payment: null, amount: null, date: '', comment: '' };
   const pays = d.payments.filter(p => p !== 'Paid to Partner');
-  const mine = shiftLines(d.lines, d.shift).filter(l => l.type === 'Expense' && l.comment !== 'Refunding');
+  const mine = shiftLines(d.lines, d.shift).filter(l => l.type === 'Expense' && l.comment !== 'Refunding' && l.object !== 'Cash Supply');
   const minDate = new Date(Date.now() + 8 * 3600000 - 30 * 86400000).toISOString().slice(0, 10);
   root.innerHTML = `<div class="expenses">
     <section class="card">
@@ -535,3 +548,142 @@ function renderExpenses(root, d) {
 }
 
 export const expenseBusy = ui => !!(ui.expense && (ui.expense.amount || ui.expense.comment));
+
+// ---------------------------------------------------------------- cash box
+// The old Phantom Cash window: phantom cash (change not given yet / money not received
+// yet), the list of unsolved ones with "Solved", and Cash Supply.
+const pidNew = () => 'P' + Date.now().toString(36) + '-' + crypto.randomUUID().slice(0, 6);
+const phantomWhen = e => e.ts ? `${lineDay(e.ts)} ${lineTime(e.ts)}` : '';
+const signed = n => `${n < 0 ? '−' : '+'}${money(Math.abs(n))}`;
+
+async function renderCash(root, d) {
+  const { ui } = d;
+  const box = await cashboxView();
+  const users = (await db.get('users')) || [];
+  const nameOf = a => (users.find(u => u.author === a || u.username === a) || {}).name || a;
+  const allowed = d.user.role !== 'staff' || (d.shift && d.shift.user === d.user.username);
+  const ph = ui.phantom = ui.phantom || { kind: null, amount: null, comment: '' };
+  const sup = ui.supply = ui.supply || { amount: null };
+  const open = box.filter(e => e.type === 'Phantom').sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  if (ui.solving && !open.some(e => e.key === ui.solving)) ui.solving = null; // solved elsewhere meanwhile
+  const inShift = shiftCash(box, d.shift);
+  const supplies = shiftLines(d.lines, d.shift).filter(l => l.object === 'Cash Supply' && l.type === 'Income');
+  const net = inShift.reduce((s, e) => s + e.diff, 0);
+  const typeLabel = { 'Phantom': 'Phantom', 'Phantom Solved': 'Phantom, solved', 'Phantom Salvation': 'Solved' };
+  const wait = e => e.pending ? '<span class="badge wait" title="Saved on this computer, not yet in the sheet">Waiting</span>' : '';
+  root.innerHTML = `<div class="cashbox">
+    <div class="col">
+      <section class="card">
+        <h2>Phantom cash</h2>
+        <p class="muted">Money that is in the box, or missing from it, without a sale or an expense behind it yet.</p>
+        ${allowed ? `<form id="phForm" novalidate>
+          <div class="kinds">
+            <button type="button" class="kind${ph.kind === 'given' ? ' on' : ''}" data-kind="given" aria-pressed="${ph.kind === 'given'}">
+              <b>Cash not given</b><small>Change we still owe someone. The box has more.</small></button>
+            <button type="button" class="kind${ph.kind === 'received' ? ' on' : ''}" data-kind="received" aria-pressed="${ph.kind === 'received'}">
+              <b>Cash not received</b><small>Money someone still owes us. The box has less.</small></button>
+          </div>
+          <label class="field money"><span>Amount</span>
+            <span class="moneybox"><span class="cur">Rp</span><input id="phAmount" inputmode="numeric" autocomplete="off" value="${ph.amount ? money(ph.amount) : ''}"></span></label>
+          <label class="field"><span>Who and why</span><input id="phComment" maxlength="300" value="${esc(ph.comment)}" placeholder="e.g. change for Elias, room 3"></label>
+          <button class="primary wide" type="submit">Record phantom cash</button>
+          <p class="error" role="alert"></p>
+        </form>` : '<p class="muted">Only the person on shift or a manager can record cash here.</p>'}
+      </section>
+      <section class="card">
+        <h2>Cash supply</h2>
+        <p class="muted">Cash brought to the desk from outside, for change.</p>
+        ${allowed ? `<form id="supForm" novalidate>
+          <label class="field money"><span>Amount put in the box</span>
+            <span class="moneybox"><span class="cur">Rp</span><input id="supAmount" inputmode="numeric" autocomplete="off" value="${sup.amount ? money(sup.amount) : ''}"></span></label>
+          ${ui.supplyConfirm ? `<div class="inline warn"><span>Add Rp ${money(sup.amount)} to the box?</span>
+            <button class="primary small" type="submit">Add</button><button class="ghost small" type="button" data-supcancel>Cancel</button></div>`
+          : '<button class="ghost wide" type="submit">Add cash supply</button>'}
+          <p class="error" role="alert"></p>
+        </form>` : ''}
+        ${supplies.length ? `<ul class="plain">${supplies.map(l => `<li><span>${lineTime(l.ts)}</span><span class="num">+${money(l.total)}</span>${l.pending ? '<span class="badge wait">Waiting</span>' : ''}</li>`).join('')}</ul>` : ''}
+      </section>
+    </div>
+    <div class="col">
+      <section class="card">
+        <h2>Not solved yet</h2>
+        ${open.length ? `<ul class="phantoms">${open.map(e => `<li class="${ui.solving === e.key ? 'open' : ''}">
+          <span class="when">${esc(phantomWhen(e))}</span>
+          <span class="what"><b>${esc(e.comment || '—')}</b><span class="who">${e.diff > 0 ? 'Cash not given' : 'Cash not received'} · ${esc(nameOf(e.author))}</span></span>
+          <span class="amt num">${signed(e.diff)}</span>
+          <span class="acts">${wait(e)}${allowed ? `<button class="link" type="button" data-solve="${esc(e.key)}">Solved</button>` : ''}</span>
+          ${ui.solving === e.key ? `<div class="inline warn"><span>${e.diff > 0 ? `Rp ${money(e.diff)} given back now?` : `Rp ${money(-e.diff)} received now?`} The box changes by ${signed(-e.diff)}.</span>
+            <button class="primary small" type="button" data-solveok="${esc(e.key)}">Yes, solved</button><button class="ghost small" type="button" data-solvecancel>Cancel</button></div>` : ''}
+        </li>`).join('')}</ul>` : '<p class="muted">Nothing waiting.</p>'}
+      </section>
+      <section class="card">
+        <h2>In this shift</h2>
+        ${inShift.length ? `<ul class="phantoms">${inShift.map(e => `<li>
+          <span class="when">${esc(lineTime(e.ts))}</span>
+          <span class="what"><b>${esc(e.comment || (e.type === 'Phantom Salvation' ? 'Phantom cash solved' : '—'))}</b><span class="who">${esc(typeLabel[e.type] || e.type)} · ${esc(nameOf(e.author))}</span></span>
+          <span class="amt num">${signed(e.diff)}</span><span class="acts">${wait(e)}</span></li>`).join('')}</ul>
+          <div class="ctotal"><span>Phantom cash in the box</span><b class="num">${signed(net)}</b></div>` : '<p class="muted">No phantom cash in this shift.</p>'}
+      </section>
+    </div>
+  </div>`;
+
+  root.addEventListener('click', async e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.kind) { ph.kind = b.dataset.kind; root.querySelectorAll('[data-kind]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); root.querySelector('#phAmount').focus(); }
+    else if (b.dataset.solve) { ui.solving = b.dataset.solve; d.render(); }
+    else if (b.dataset.solvecancel !== undefined) { ui.solving = null; d.render(); }
+    else if (b.dataset.supcancel !== undefined) { ui.supplyConfirm = false; d.render(); }
+    else if (b.dataset.solveok) {
+      b.disabled = true;
+      const target = open.find(x => x.key === b.dataset.solveok);
+      if (target) {
+        await enqueue('phantom_solve', { pid: pidNew(), target: target.key });
+        ui.notice = `Phantom cash solved: ${target.comment}, box ${signed(-target.diff)}.`;
+      }
+      ui.solving = null;
+      d.render();
+    }
+  });
+  const phf = root.querySelector('#phForm');
+  if (phf) {
+    const err = phf.querySelector('.error');
+    phf.addEventListener('input', e => {
+      const t = e.target;
+      if (t.id === 'phAmount') { const v = parseMoney(t.value); t.value = v === null ? '' : money(v); ph.amount = v; }
+      if (t.id === 'phComment') ph.comment = t.value;
+    });
+    phf.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!ph.kind) { err.textContent = 'Choose cash not given or cash not received.'; return; }
+      if (!ph.amount || ph.amount > 1e9) { err.textContent = 'Enter the amount.'; root.querySelector('#phAmount').focus(); return; }
+      if (!ph.comment.trim()) { err.textContent = 'Say who it is for and why.'; root.querySelector('#phComment').focus(); return; }
+      phf.querySelector('button[type=submit]').disabled = true;
+      const payload = { pid: pidNew(), comment: ph.comment.trim() };
+      payload[ph.kind === 'given' ? 'notGiven' : 'notReceived'] = ph.amount;
+      await enqueue('phantom', payload);
+      ui.notice = `Phantom cash recorded: ${ph.kind === 'given' ? 'cash not given' : 'cash not received'}, Rp ${money(ph.amount)}.`;
+      ui.phantom = null;
+      d.render();
+    });
+  }
+  const sf = root.querySelector('#supForm');
+  if (sf) {
+    const err = sf.querySelector('.error');
+    sf.addEventListener('input', e => {
+      if (e.target.id === 'supAmount') { const v = parseMoney(e.target.value); e.target.value = v === null ? '' : money(v); sup.amount = v; ui.supplyConfirm = false; }
+    });
+    sf.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!sup.amount || sup.amount > 1e9) { err.textContent = 'Enter the amount.'; root.querySelector('#supAmount').focus(); return; }
+      if (!ui.supplyConfirm) { ui.supplyConfirm = true; d.render(); return; }
+      sf.querySelectorAll('button').forEach(x => { x.disabled = true; });
+      await enqueue('cash_supply', { ts: await nextTs(), ts2: await nextTs(), amount: sup.amount });
+      ui.notice = `Cash supply recorded: Rp ${money(sup.amount)} in the box.`;
+      ui.supply = null; ui.supplyConfirm = false;
+      d.render();
+    });
+  }
+}
+
+export const cashBusy = ui => !!((ui.phantom && (ui.phantom.amount || ui.phantom.comment)) || (ui.supply && ui.supply.amount) || ui.solving);

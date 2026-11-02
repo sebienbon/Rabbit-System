@@ -268,3 +268,29 @@ fieldset.field legend { font-weight: 700; padding: 0; margin-bottom: 6px; }
 .row2 { display: grid; grid-template-columns: 170px 1fr; gap: 12px; }
 @media (max-width: 900px) { .expenses { grid-template-columns: 1fr; } }
 @media (max-width: 520px) { .eitems { grid-template-columns: 1fr 1fr; } .row2 { grid-template-columns: 1fr; } }
+
+/* cash box */
+.cashbox { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.cashbox .col { display: grid; gap: 18px; }
+.kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.kind { display: grid; gap: 2px; text-align: left; padding: 12px; background: var(--bg); color: var(--ink); border: 1.5px solid var(--line); border-left-width: 5px; }
+.kind[data-kind="given"] { border-left-color: var(--ok); }
+.kind[data-kind="received"] { border-left-color: var(--bad); }
+.kind small { font-weight: 400; color: var(--ink-soft); font-size: .88rem; line-height: 1.3; }
+.kind.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.kind.on small { color: #D7DEE7; }
+.phantoms { list-style: none; padding: 0; margin: 0; }
+.phantoms li { display: grid; grid-template-columns: 92px minmax(0, 1fr) 100px; grid-template-areas: "when what amt" ". acts acts" "extra extra extra"; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.phantoms .when { grid-area: when; color: var(--ink-soft); font-variant-numeric: tabular-nums; font-size: .95rem; }
+.phantoms .what { grid-area: what; }
+.phantoms .who { display: block; color: var(--ink-soft); font-size: .9rem; }
+.phantoms .amt { grid-area: amt; text-align: right; }
+.phantoms .acts { grid-area: acts; display: flex; gap: 12px; justify-content: flex-end; align-items: baseline; }
+.phantoms .acts .link { margin: 0; padding: 0; font-size: .92rem; }
+.phantoms .inline { grid-area: extra; }
+ul.plain { list-style: none; padding: 0; margin: 12px 0 0; }
+ul.plain li { display: flex; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+ul.plain li .num { margin-left: auto; }
+@media (max-width: 900px) { .cashbox { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .kinds { grid-template-columns: 1fr; } }
+.phnote { display: block; font-size: .85rem; }

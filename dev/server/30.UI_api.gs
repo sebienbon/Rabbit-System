@@ -267,7 +267,8 @@ var UIAPI = (function () {
       payments: readPayments_(),
       guests: readGuests_(),
       shift: shiftState_(),
-      lines: readLines_()
+      lines: readLines_(),
+      cashbox: readCashbox_()
     };
     if (sess.reg) {
       // Hashes let the registered reception computer check passwords during an outage.
@@ -317,7 +318,7 @@ var UIAPI = (function () {
       var s = ss_().getSheetByName(sheetName);
       if (!s || s.getLastRow() < 2) return;
       s.getRange(2, col, s.getLastRow() - 1, 1).getValues().forEach(function (r) {
-        var n = String(r[0]).trim(); if (n && !/^Expense/.test(n)) names[n] = true;
+        var n = String(r[0]).trim(); if (n && !/^Expense/.test(n) && n !== 'Cash Supply') names[n] = true;
       });
     }
     add(SHEETS.feed, 3);
@@ -512,6 +513,58 @@ var UIAPI = (function () {
     return t;
   }
 
+  // ---------- cash box (Cashouts&Cor) ----------
+  // Phantom cash, as the old Phantom Cash dialogs wrote it: A date, B time, D difference
+  // (+ change not given yet, − money not received yet), E cash in the box after it,
+  // G author, H comment, I "Phantom". Solving it adds a "Phantom Salvation" row with the
+  // opposite difference and marks the original "Phantom Solved".
+  var PHANTOM_TYPES = ['Phantom', 'Phantom Solved', 'Phantom Salvation'];
+  var TAG_RE = /\s*\[(P[\w-]+)\]\s*$/;
+  /** Every row of Cashouts&Cor with its sheet row number, its time as a line id, and our tag if any. */
+  function cashRows_() {
+    var s = ss_().getSheetByName(SHEETS.cash);
+    if (!s || s.getLastRow() < 2) return [];
+    var n = s.getLastRow() - 1;
+    var shown = s.getRange(2, 1, n, 2).getDisplayValues(), vals = s.getRange(2, 1, n, 9).getValues();
+    return vals.map(function (r, i) {
+      var ts = '';
+      try {
+        var d = Utilities.parseDate(shown[i][0] + ' ' + shown[i][1], tz_(), 'dd/MM/yyyy HH:mm:ss');
+        if (d && !isNaN(d.getTime())) ts = tsOf_(d);
+      } catch (e) { /* unreadable date: no time for this row */ }
+      var comment = String(r[7]), m = comment.match(TAG_RE);
+      return { row: i + 2, ts: ts, cashout: r[2], diff: num_(r[3]), box: r[4], author: String(r[6]),
+        comment: m ? comment.replace(TAG_RE, '') : comment, pid: m ? m[1] : '', type: String(r[8]) };
+    });
+  }
+  /** Identifies a phantom row written without our tag (old dialog): time, difference, author. */
+  function phantomKey_(c) { return c.pid ? c.pid : c.ts ? 'K' + c.ts.slice(0, 14) + '|' + c.diff + '|' + c.author : 'R' + c.row; }
+  /** Phantom rows the device needs: every unsolved one, and all of the last LINE_DAYS days. */
+  function readCashbox_() {
+    var from = tsOf_(new Date(Date.now() - LINE_DAYS * 86400000));
+    return cashRows_().filter(function (c) {
+      return PHANTOM_TYPES.indexOf(c.type) >= 0 && (c.type === 'Phantom' || c.ts >= from);
+    }).map(function (c) {
+      return { key: phantomKey_(c), pid: c.pid, ts: c.ts, diff: c.diff, comment: c.comment, author: c.author, type: c.type };
+    });
+  }
+  /** Staff record cash-box events only during their own open shift; managers at any time. */
+  function assertCashRight_(me) {
+    if (me.role === 'staff' && !myOpenShift_(me)) throw apiError_('forbidden', 'Open your shift first.');
+  }
+  function pid_(v) {
+    var s = String(v || '');
+    if (!/^P[\w-]{6,40}$/.test(s)) throw apiError_('bad_payload', 'Invalid id');
+    return s;
+  }
+  function appendCash_(at, diff, author, comment, type, pid) {
+    var cash = sheet_(SHEETS.cash);
+    var box = lastCashInBox_() + diff;
+    appendAfterData_(cash, [dateOnly_(at), fmt_(at, 'HH:mm:ss'), '', diff, box, '', author,
+      safe_((String(comment || '') + ' [' + pid + ']').trim()), type], [1]);
+    return box;
+  }
+
   // ---------- push ----------
   // Each handler: validate everything first, then write. Re-running it for the same
   // shiftId after a partial failure must not write twice.
@@ -563,6 +616,7 @@ var UIAPI = (function () {
       assertCanChange_(me, row);
       var before = lineOut_(row);
       var isExp = String(row[E.type]) === 'Expense';
+      if (String(row[E.obj]) === 'Cash Supply') throw apiError_('bad_payload', 'A cash supply cannot be edited; a manager can delete it and enter it again');
       if (isExp && (p.qty !== undefined || p.unit !== undefined || p.guest !== undefined)) {
         throw apiError_('bad_payload', 'An expense only has an amount, a payment type and a comment');
       }
@@ -681,7 +735,7 @@ var UIAPI = (function () {
         }
       } else {
         if (!orig) throw apiError_('line_not_found', 'The sale is no longer in the sheet');
-        if (String(orig[E.type]) !== 'Income') throw apiError_('bad_payload', 'Only a sale can be refunded');
+        if (String(orig[E.type]) !== 'Income' || String(orig[E.obj]) === 'Cash Supply') throw apiError_('bad_payload', 'Only a sale can be refunded');
         if (String(orig[E.pay]) === 'Unpaid') throw apiError_('bad_payload', 'This sale was never paid; delete or change it instead');
         if (String(orig[E.comment]) === 'Refunded') throw apiError_('already_refunded', 'This sale was already refunded');
         if (me.role === 'staff' && pay !== String(orig[E.pay])) throw apiError_('forbidden', 'Refund with the same payment type as the sale (' + orig[E.pay] + '), or ask a manager');
@@ -739,6 +793,83 @@ var UIAPI = (function () {
       }
       return ex ? { already: true } : {};
     },
+    /** Phantom cash: change not given yet (+) or money not received yet (−), with a reason. */
+    phantom: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var pid = pid_(p.pid);
+      var given = p.notGiven ? amount_(p.notGiven, 'amount') : 0, received = p.notReceived ? amount_(p.notReceived, 'amount') : 0;
+      if ((given > 0) === (received > 0)) throw apiError_('bad_amount', 'Enter either cash not given or cash not received');
+      var comment = text_(p.comment, 300, 'Comment');
+      if (!String(comment).trim()) throw apiError_('bad_payload', 'Say what the phantom cash is about');
+      assertCashRight_(me);
+      if (cashRows_().some(function (c) { return c.pid === pid; })) return { already: true };
+      var diff = given > 0 ? given : -received;
+      return { box: appendCash_(at, diff, me.author || me.username, comment, 'Phantom', pid), difference: diff };
+    },
+    /** Settles a phantom: opposite difference on a "Phantom Salvation" row, original marked "Phantom Solved". */
+    phantom_solve: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var pid = pid_(p.pid);
+      assertCashRight_(me);
+      var rows = cashRows_();
+      var orig = rows.filter(function (c) { return (c.type === 'Phantom' || c.type === 'Phantom Solved') && phantomKey_(c) === String(p.target); })[0];
+      if (!orig) throw apiError_('line_not_found', 'This phantom cash is no longer in the sheet');
+      if (rows.some(function (c) { return c.pid === pid && c.type !== 'Phantom Salvation'; })) throw apiError_('bad_payload', 'Invalid id');
+      var done = rows.some(function (c) { return c.pid === pid && c.type === 'Phantom Salvation'; });
+      if (!done && orig.type === 'Phantom Solved') throw apiError_('already_solved', 'This phantom cash was already solved');
+      var cash = sheet_(SHEETS.cash);
+      // The row to mark must still be this phantom (same difference, author and comment) before anything is written.
+      var still = function () {
+        var r = cash.getRange(orig.row, 1, 1, 9).getValues()[0];
+        return num_(r[3]) === orig.diff && String(r[6]) === orig.author && String(r[7]).replace(TAG_RE, '') === orig.comment &&
+          PHANTOM_TYPES.indexOf(String(r[8])) >= 0;
+      };
+      if (!still()) throw new Error('Rows moved in Cashouts&Cor; will retry');
+      // Like the old Solved button: the Salvation row has no comment of its own.
+      if (!done) appendCash_(at, -orig.diff, me.author || me.username, '', 'Phantom Salvation', pid);
+      if (orig.type !== 'Phantom Solved') cash.getRange(orig.row, 9).setValue('Phantom Solved');
+      return done ? { already: true } : { difference: -orig.diff };
+    },
+    /**
+     * Cash brought to the desk from outside, as the old Cash Supply dialog wrote it: an Income
+     * line "Cash Supply" paid Cash (H) and an Expense line paid "Extern Cash" (L), both
+     * C "Other", M "Cash Supply"; "Cash Supply" added once to New guest column F.
+     * The two lines get their own ids (the old dialog gave both the same timestamp).
+     */
+    cash_supply: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var ts = lineTs_(p.ts, at), ts2 = lineTs_(p.ts2, at);
+      if (ts === ts2) throw apiError_('bad_payload', 'Duplicate line id');
+      var amount = amount_(p.amount, 'amount');
+      if (amount <= 0) throw apiError_('bad_amount', 'Invalid amount');
+      assertCashRight_(me);
+      var author = me.author || me.username, day = dateOnly_(at);
+      var rows = [
+        [day, 'Income', 'Other', 'Cash Supply', '', '', '', amount, author, '', '', '', 'Cash Supply', 'Cash', ts, '', ''],
+        [day, 'Expense', 'Other', 'Cash Supply', '', '', '', '', author, '', '', amount, 'Cash Supply', 'Extern Cash', ts2, '', '']
+      ];
+      var ent = entries_(), man = manual_();
+      rows.forEach(function (r) {
+        var ex = ent.row(r[E.ts]);
+        if (ex && (String(ex[E.type]) !== r[E.type] || !same_(ex[E.obj], 'Cash Supply') || String(ex[E.author]) !== author ||
+            num_(r[E.type] === 'Income' ? ex[E.real] : ex[E.realCost]) !== amount)) {
+          throw apiError_('ts_collision', 'The sheet already has a different line with this id. Nothing was written.');
+        }
+      });
+      var already = !!(ent.byTs[ts] && ent.byTs[ts2]);
+      appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }));
+      appendManual_(man, rows.filter(function (r) { return !man.byTs[r[E.ts]]; }));
+      var ng = ss_().getSheetByName(SHEETS.newGuest);
+      if (ng) {
+        var last = lastRowIn_(ng, 6, 1);
+        var known = last >= 1 && ng.getRange(1, 6, last, 1).getValues().some(function (r) { return String(r[0]) === 'Cash Supply'; });
+        if (!known) ng.getRange(last + 1, 6).setValue('Cash Supply');
+      }
+      return already ? { already: true } : {};
+    },
     shift_open: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
@@ -791,6 +922,11 @@ var UIAPI = (function () {
         if (!isTs_(t) || t < from || t >= to || String(r[E.pay]) !== 'Cash') return;
         if (r[E.type] === 'Income') sheetExpected += num_(r[E.real] !== '' ? r[E.real] : r[E.total]);
         else if (r[E.type] === 'Expense') sheetExpected -= num_(r[E.realCost]);
+      });
+      // Phantom cash recorded during the shift is in the box too (the old dialog started from the last E).
+      cashRows_().forEach(function (c) {
+        // Whole seconds: the sheet keeps only HH:mm:ss for these rows.
+        if (PHANTOM_TYPES.indexOf(c.type) >= 0 && c.ts && c.ts.slice(0, 14) >= from.slice(0, 14) && c.ts.slice(0, 14) <= to.slice(0, 14)) sheetExpected += c.diff;
       });
       var diff = counted + cashout - sheetExpected;
       var author = rec[COL.author] || me.author || me.username;
@@ -871,7 +1007,7 @@ var UIAPI = (function () {
         }
         var vBefore = version_();
         log.appendRow([new Date(), id, String(body.deviceId || ''), who, String(op.type),
-          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs) || ''), String(op.at || ''), status, detail,
+          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs || op.payload.pid) || ''), String(op.at || ''), status, detail,
           JSON.stringify(op.payload || {}).slice(0, 45000)]);
         PropertiesService.getScriptProperties().setProperty('UI_V', String(vBefore + 1));
         seen[id] = { status: status, detail: detail };

@@ -64,6 +64,12 @@ export function applyOps(lines, ops) {
         byTs.delete(it.oldTs);
         byTs.set(it.newTs, mark({ ...l, ts: it.newTs, payment: p.payment, author: op.author || l.author }));
       }
+    } else if (op.type === 'cash_supply') {
+      // Cash brought to the desk: an Income line paid Cash and an Expense line paid "Extern Cash".
+      const base = { category: 'Other', object: 'Cash Supply', qty: null, unit: 0, unitCost: 0, author: op.author || '',
+        guest: 'Cash Supply', comment: '', soldBy: op.by };
+      if (!byTs.has(p.ts)) byTs.set(p.ts, mark({ ...base, ts: p.ts, type: 'Income', total: p.amount, cost: 0, payment: 'Cash' }));
+      if (!byTs.has(p.ts2)) byTs.set(p.ts2, mark({ ...base, ts: p.ts2, type: 'Expense', total: 0, cost: p.amount, payment: 'Extern Cash' }));
     } else if (op.type === 'refund') {
       const orig = byTs.get(p.origTs);
       if (orig) { orig.comment = 'Refunded'; mark(orig); }
@@ -77,15 +83,56 @@ export function applyOps(lines, ops) {
   return [...byTs.values()].sort((a, b) => (a.ts < b.ts ? 1 : -1));
 }
 
-/** Lines as the device should show them right now. */
-export async function ledgerView() {
-  const [lines, linesV, applied, outbox] = await Promise.all([db.get('lines'), db.get('linesV'), db.all('applied'), db.all('outbox')]);
+/** Operations not yet in the last copy pulled from the sheet: those already sent, then those waiting. */
+async function newerOps() {
+  const [linesV, applied, outbox] = await Promise.all([db.get('linesV'), db.all('applied'), db.all('outbox')]);
   const v = linesV || 0;
-  const ops = [
+  return [
     ...applied.filter(a => a.v > v).sort((a, b) => a.seq - b.seq).map(a => ({ op: a.op, pending: false })),
     ...outbox.sort((a, b) => a.seq - b.seq).map(op => ({ op, pending: true })),
   ];
+}
+
+/** Lines as the device should show them right now. */
+export async function ledgerView() {
+  const [lines, ops] = await Promise.all([db.get('lines'), newerOps()]);
   return applyOps(lines || [], ops);
+}
+
+/**
+ * Phantom cash rows of Cashouts&Cor (Phantom, Phantom Solved, Phantom Salvation), with
+ * phantom and phantom_solve operations replayed on top. A row written through the
+ * interface is known by its id (pid) both here and in the sheet.
+ */
+export function applyCashOps(entries, ops) {
+  const byKey = new Map(entries.map(e => [e.key, { ...e }]));
+  for (const { op, pending } of ops) {
+    const p = op.payload || {};
+    if (op.type === 'phantom') {
+      if (byKey.has(p.pid)) continue;
+      byKey.set(p.pid, { key: p.pid, pid: p.pid, ts: tsFromIso(op.at), diff: p.notGiven ? p.notGiven : -p.notReceived,
+        comment: p.comment || '', author: op.author || '', type: 'Phantom', pending, by: op.by });
+    } else if (op.type === 'phantom_solve') {
+      const orig = byKey.get(p.target);
+      if (!orig || orig.type !== 'Phantom' || byKey.has(p.pid)) continue; // solved elsewhere: the sheet will refuse it
+      orig.type = 'Phantom Solved';
+      if (pending) orig.pending = true;
+      byKey.set(p.pid, { key: p.pid, pid: p.pid, ts: tsFromIso(op.at), diff: -orig.diff, comment: orig.comment,
+        author: op.author || '', type: 'Phantom Salvation', pending, by: op.by });
+    }
+  }
+  return [...byKey.values()].sort((a, b) => (a.ts < b.ts ? 1 : -1));
+}
+export async function cashboxView() {
+  const [entries, ops] = await Promise.all([db.get('cashbox'), newerOps()]);
+  return applyCashOps(entries || [], ops);
+}
+/** Phantom rows recorded during a shift (the sheet keeps whole seconds for them). */
+export function shiftCash(entries, shift) {
+  if (!shift) return [];
+  const from = tsFromIso(shift.openedAt).slice(0, 14);
+  const to = shift.closedAt ? tsFromIso(shift.closedAt).slice(0, 14) : '99999999999999';
+  return entries.filter(e => e.ts && e.ts.slice(0, 14) >= from && e.ts.slice(0, 14) <= to);
 }
 
 /** Lines that belong to a shift: recorded between its opening and its closing. */
@@ -115,7 +162,8 @@ const REFUND_MARKS = ['Refunded', 'Refunding'];
 export function canChange(line, user, shift) {
   if (!user) return false;
   if (user.role !== 'staff') return true;
+  if (line.object === 'Cash Supply') return false;
   return !!shift && shift.status === 'open' && shift.user === user.username && (line.type === 'Income' || line.type === 'Expense') &&
     !REFUND_MARKS.includes(line.comment) && line.soldBy === user.username && line.ts >= tsFromIso(shift.openedAt);
 }
-export const canRefund = l => l.type === 'Income' && l.payment !== 'Unpaid' && l.comment !== 'Refunded' && !l.pending;
+export const canRefund = l => l.type === 'Income' && l.object !== 'Cash Supply' && l.payment !== 'Unpaid' && l.comment !== 'Refunded' && !l.pending;
