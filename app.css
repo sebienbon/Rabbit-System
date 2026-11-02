@@ -512,3 +512,10 @@ ul.plain li .num { margin-left: auto; }
 /* The Rabbit Tree logo on the login screen */
 .login h1 { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .login h1::before { content: ''; width: 260px; height: 140px; background: url(img/logo-mark-ink.png) left top / auto 92px no-repeat, url(img/logo-name-ink.png) left bottom / auto 38px no-repeat; animation: none; }
+
+/* keep the 9 tabs on one line on the reception screen, even with counts */
+@media (min-width: 900px) {
+  .tabs button:not([data-tab="bar"])::before { width: 24px; height: 24px; }
+  .tabs button { padding: 7px 8px 7px 5px; gap: 4px; font-size: .93rem; }
+  .tabs .count { padding: 0 5px; font-size: .75rem; }
+}
