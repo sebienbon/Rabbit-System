@@ -468,12 +468,12 @@ ul.plain li .num { margin-left: auto; }
 
 /* ---------- Rabbit Tree logos (img/, from the Control Board sheet) ---------- */
 .tabs [data-tab="sell"]     { --logo: url(img/sales.webp); }
-.tabs [data-tab="bills"]    { --logo: url(img/bills.webp); }
+.tabs [data-tab="bills"]    { --logo: url(img/unpaid.webp); }
 .tabs [data-tab="expenses"] { --logo: url(img/expenses.webp); }
 .tabs [data-tab="cash"]     { --logo: url(img/phantom.webp); }
 .tabs [data-tab="partners"] { --logo: url(img/partners.webp); }
 .tabs [data-tab="card"]     { --logo: url(img/edc.webp); }
-.tabs [data-tab="shift"]    { --logo: url(img/shift.webp); }
+.tabs [data-tab="shift"]    { --logo: url(img/summary.webp); }
 .tabs [data-tab="close"]    { --logo: url(img/close.webp); }
 .tabs button:not([data-tab="bar"])::before { width: 28px; height: 28px; -webkit-mask: none; mask: none; background: var(--logo) center / contain no-repeat; }
 .tabs button:not([data-tab="bar"]) { padding-left: 6px; }
@@ -482,25 +482,27 @@ ul.plain li .num { margin-left: auto; }
 
 /* the section's logo next to the shift title */
 .card.shift { --hero: url(img/sales.webp); }
-.card.shift:has([data-tab="bills"][aria-selected="true"])    { --hero: url(img/bills.webp); }
+.card.shift:has([data-tab="bills"][aria-selected="true"])    { --hero: url(img/unpaid.webp); }
 .card.shift:has([data-tab="expenses"][aria-selected="true"]) { --hero: url(img/expenses.webp); }
 .card.shift:has([data-tab="cash"][aria-selected="true"])     { --hero: url(img/phantom.webp); }
 .card.shift:has([data-tab="partners"][aria-selected="true"]) { --hero: url(img/partners.webp); }
 .card.shift:has([data-tab="card"][aria-selected="true"])     { --hero: url(img/edc.webp); }
-.card.shift:has([data-tab="bar"][aria-selected="true"])      { --hero: url(img/mascot.webp); }
-.card.shift:has([data-tab="shift"][aria-selected="true"])    { --hero: url(img/shift.webp); }
+.card.shift:has([data-tab="bar"][aria-selected="true"])      { --hero: none; }
+.card.shift:has([data-tab="bar"][aria-selected="true"]) .shifthead h2::before { display: none; }
+.card.shift:has([data-tab="shift"][aria-selected="true"])    { --hero: url(img/summary.webp); }
 .card.shift:has([data-tab="close"][aria-selected="true"])    { --hero: url(img/close.webp); }
 .shifthead { align-items: center; }
 .shifthead h2 { display: flex; align-items: center; gap: 14px; margin: 0; }
 .shifthead h2::before { content: ''; flex: none; width: 80px; height: 80px; background: var(--hero) center / contain no-repeat; animation: rt-hop 2.8s ease-in-out infinite; }
 
-/* open, close and login screens */
-.card:has(#openForm) > h2, .login h1 { display: flex; align-items: center; gap: 14px; }
-.card:has(#openForm) > h2::before, .login h1::before {
+/* open shift screen, partner bills */
+.card:has(#openForm) > h2, .card:has(.billlist) > h2 { display: flex; align-items: center; gap: 14px; }
+.card:has(#openForm) > h2::before, .card:has(.billlist) > h2::before {
   content: ''; flex: none; width: 76px; height: 76px; background: var(--hero) center / contain no-repeat; animation: rt-hop 2.8s ease-in-out infinite; }
 .card:has(#openForm) { --hero: url(img/open.webp); }
-.login { --hero: url(img/mascot.webp); }
-.login h1::before { width: 88px; height: 88px; }
+/* partner bills waiting for payment = "Ongoing bills" (old showBillList) */
+.card:has(.billlist) { --hero: url(img/bills.webp); }
+.card:has(.billlist) > h2::before { width: 56px; height: 56px; }
 
 /* the Unpaid sign */
 .pay[data-pay="Unpaid"]::before { width: 22px; height: 22px; -webkit-mask: none; mask: none; background: url(img/unpaid.webp) center / contain no-repeat; }
