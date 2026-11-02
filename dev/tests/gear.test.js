@@ -66,7 +66,7 @@ test('back-before rule: 24 h, out before noon → next day 12:00, from noon → 
   assert.strictEqual(env.book['SG'].data[1][2], 'Ann');
 });
 
-test('a rental is a sale line per number; an unavailable number refuses the whole sale', () => {
+test('a rental is a sale line per number; a number already out never refuses the money, it becomes a difference', () => {
   const env = freshEnv();
   const ayu = login(env, 'ayu'); openShift(env, ayu);
   const r = rent(env, ayu, 'Ann', ['SG001', 'SG002'], 2, 'Cash');
@@ -74,8 +74,11 @@ test('a rental is a sale line per number; an unavailable number refuses the whol
   const lines = env.book['Entries'].data.slice(1);
   assert.deepStrictEqual(lines.map(l => [l[3], l[4], l[7], l[16]]), [['Snorkeling Mask', 2, 60000, 'SG001'], ['Snorkeling Mask', 2, 60000, 'SG002']]);
   const again = rent(env, ayu, 'Ben', ['SG002', 'SG003'], 1);
-  assert.strictEqual(again.results[0].error, 'gear_unavailable');
-  assert.strictEqual(env.book['Entries'].data.length, 3, 'nothing written for the refused sale');
+  assert.strictEqual(again.results[0].status, 'applied');
+  assert.strictEqual(env.book['Entries'].data.length, 5, 'the sale is written');
+  const g = gearOf(env, ayu);
+  assert.deepStrictEqual(g.diffs.map(d => [d.item, d.kind]), [['SG002', 'rented_while_out']]);
+  assert.strictEqual(item(g, 'SG002').last.guest, 'Ben');
   assert.strictEqual(rent(env, ayu, 'Ben', ['B1'], 1).results[0].status, 'applied', 'a bike');
 });
 
@@ -95,8 +98,8 @@ test('return at the desk: late extension charged Unpaid, damage goes to the deci
   const dmg = g.damages.find(d => d.item === 'SG002');
   assert.ok(dmg && dmg.guest === 'Ann' && dmg.decision === 'pending');
   assert.strictEqual(g.prices['Snorkel missing'], 75000);
-  // The broken one can't be rented until back in service.
-  assert.strictEqual(rent(env, ayu, 'Ben', ['SG002'], 1).results[0].error, 'gear_unavailable');
+  // The broken one is not offered for rent (the Sell picker only lists OK numbers in the box).
+  assert.notStrictEqual(item(g, 'SG002').condition, 'OK');
   const dec = push(env, ayu, op('gear_decide', { did: id('E'), damage: dmg.id, decision: 'charge', amount: 75000, ts: newTs() }));
   assert.strictEqual(dec.results[0].status, 'applied');
   assert.ok(env.book['Entries'].data.some(l => l[3] === 'Gear damage' && l[7] === 75000 && l[12] === 'Ann' && l[13] === 'Unpaid'));
@@ -176,4 +179,39 @@ test('Google failure in the middle of a rental: retry completes, the number goes
   assert.strictEqual(push(env, ayu, s).results[0].status, 'applied');
   assert.strictEqual(env.book['Gear_Log'].data.slice(1).filter(r => r[2] === 'out').length, 1);
   assert.strictEqual(env.book['Entries'].data.slice(1).length, 1);
+});
+
+test('security: a gear account cannot register a device nor act for another user', () => {
+  const env = freshEnv();
+  const r = env.call({ action: 'login', username: 'made', password: 'pw', deviceId: 'phone', registerDevice: true });
+  assert.ok(!r.registered);
+  const res = env.call({ action: 'push', token: r.token, deviceId: 'phone', ops: [{ ...op('expense', { lines: [] }), by: 'ayu' }] });
+  assert.strictEqual(res.results[0].error, 'forbidden');
+});
+
+test('Sunset Boat: a number still rented keeps its rental and is not on the boat; decisions only once', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  rent(env, ayu, 'Ann', ['SG001'], 1);
+  const trip = id('T');
+  assert.strictEqual(push(env, made, op('sunset_out', { trip, items: ['SG001', 'SG002', 'SG002'] })).results[0].status, 'applied');
+  let g = gearOf(env, ayu);
+  assert.deepStrictEqual(g.trips[0].items, ['SG002']);
+  assert.strictEqual(item(g, 'SG001').last.guest, 'Ann');
+  const df = g.diffs.find(d => d.item === 'SG001');
+  assert.strictEqual(df.kind, 'counted_but_out');
+  assert.strictEqual(push(env, ayu, op('gear_lost', { lid: id('L'), diff: df.id })).results[0].error, 'bad_payload', 'seen: not lost');
+  // A damage decided once only.
+  push(env, ayu, op('gear_return', { gid: id('G'), items: [{ item: 'SG001', condition: 'Broken' }] }));
+  g = gearOf(env, ayu);
+  const dm = g.damages[0];
+  const charge = () => push(env, ayu, op('gear_decide', { did: id('E'), damage: dm.id, decision: 'charge', amount: 50000, guest: 'Ann', ts: newTs() })).results[0];
+  assert.strictEqual(charge().status, 'applied');
+  assert.strictEqual(charge().error, 'bad_payload');
+  assert.strictEqual(env.book['Entries'].data.filter(l => l[3] === 'Gear damage').length, 1);
+  // Broken and away for repair: not "missing" at the evening check.
+  push(env, made, op('sunset_back', { trip, items: ['SG002'] }));
+  const all = gearOf(env, made).items.map(i => i.id).filter(x => x !== 'SG001');
+  push(env, made, op('gear_count', { cid: id('K'), items: all.map(x => ({ item: x, condition: 'OK' })) }));
+  assert.ok(!gearOf(env, ayu).diffs.some(d => d.item === 'SG001' && d.kind === 'missing'));
 });

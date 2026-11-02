@@ -17,7 +17,7 @@ const step = m => console.log('  ✓ ' + m);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource: net::ERR_(EMPTY_RESPONSE|INTERNET_DISCONNECTED)/.test(m.text())) errors.push(m.text()); });
+  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource: net::ERR_(EMPTY_RESPONSE|INTERNET_DISCONNECTED|CONNECTION_RESET)/.test(m.text())) errors.push(m.text()); });
   const shot = n => page.screenshot({ path: `${shots}/s${n}.png`, fullPage: true });
   const book = srv.env.book;
   const strip = () => page.textContent('#sync');

@@ -25,7 +25,7 @@ export const isRegistered = async () => !!(await db.get('deviceSecret'));
  * checked against the password hashes from the last sync.
  * `register`: a manager makes this computer the reception computer (offline-capable).
  */
-export async function login(username, password, { register = false } = {}) {
+export async function login(username, password, { register = false, gearApp = false } = {}) {
   username = username.trim().toLowerCase();
   try {
     const r = await api('login', {
@@ -34,6 +34,11 @@ export async function login(username, password, { register = false } = {}) {
       registerDevice: register || undefined,
     });
     if (register && !r.registered) throw new ApiError('not_allowed', 'Only a manager can register this computer.');
+    // Each app has its own accounts: refused before anything is stored on this device.
+    if ((r.user.role === 'gear') !== gearApp) {
+      api('logout', { token: r.token }, 8000).catch(() => {});
+      throw new ApiError('wrong_app', gearApp ? 'Akun ini untuk resepsi. Gunakan akun staf gear.' : 'Gear staff accounts use the gear app (gear.html), not the reception.');
+    }
     const user = { ...r.user, mode: 'online' };
     const writes = [['kv', 'put', r.token, 'deviceToken'], ['kv', 'put', user, 'currentUser']];
     if (r.deviceSecret) writes.push(['kv', 'put', r.deviceSecret, 'deviceSecret']);
@@ -48,6 +53,7 @@ export async function login(username, password, { register = false } = {}) {
     if (!u) throw new ApiError('offline_unknown', 'No connection, and this user is not known on this computer yet.');
     const h = await hashPassword(password, u.salt, u.rounds || 2000);
     if (h !== u.hash) throw new ApiError('bad_login', 'Wrong username or password');
+    if (u.role === 'gear') throw new ApiError('wrong_app', 'Gear staff accounts use the gear app (gear.html), not the reception.');
     const user = { username: u.username, name: u.name, role: u.role, author: u.author || u.username, mode: 'offline' };
     await db.set('currentUser', user);
     pendingOnline = { username, password };

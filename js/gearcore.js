@@ -39,8 +39,8 @@ export function applyGearOps(snap, ops, side = 'reception') {
     if (op.type === 'sale') {
       for (const l of p.lines || []) {
         const it = l.gear && items.get(l.gear);
-        if (!it || it.where !== 'in') continue;
-        it.where = 'out'; it.back = new Date(backBefore(at(op), l.qty)).toISOString();
+        if (!it) continue; // the sheet makes a difference if it was elsewhere; the rental wins
+        it.where = 'out'; it.back = new Date(backBefore(at(op), Math.max(1, Math.round(l.qty || 1)))).toISOString();
         it.last = { kind: 'rental', guest: l.guest, from: op.at, saleTs: l.ts }; mark(it);
       }
     } else if (op.type === 'gear_out') {
@@ -53,7 +53,8 @@ export function applyGearOps(snap, ops, side = 'reception') {
       for (const x of p.items || []) {
         const it = items.get(x.item); if (!it || it.where !== 'out') continue;
         ret(it, x.condition, op.at); mark(it);
-        if (x.condition && x.condition !== 'OK') damages.set('P' + op.id + x.item, { id: 'P' + op.id + x.item, item: x.item, condition: x.condition, guest: it.last ? it.last.guest : '', decision: 'pending', pending: true });
+        const did = 'D' + p.gid + '-' + x.item; // same id as the sheet gives it
+        if (x.condition && x.condition !== 'OK') damages.set(did, { id: did, item: x.item, condition: x.condition, guest: it.last ? it.last.guest : '', decision: 'pending', pending: true });
       }
     } else if (op.type === 'gear_confirm') {
       const d = diffs.get(p.diff); if (!d) continue;
@@ -66,7 +67,7 @@ export function applyGearOps(snap, ops, side = 'reception') {
       const d = diffs.get(p.diff); if (!d) continue;
       diffs.delete(d.id);
       const it = items.get(d.item); if (it) { it.where = 'lost'; it.condition = 'Lost'; mark(it); }
-      damages.set('P' + op.id, { id: 'P' + op.id, item: d.item, condition: 'Lost', guest: d.last ? d.last.guest : '', decision: 'pending', pending: true });
+      damages.set('D' + p.lid, { id: 'D' + p.lid, item: d.item, condition: 'Lost', guest: d.last ? d.last.guest : '', decision: 'pending', pending: true });
     } else if (op.type === 'gear_decide') {
       const dm = damages.get(p.damage); if (dm) { dm.decision = p.decision; mark(dm); }
     } else if (op.type === 'sunset_out') {

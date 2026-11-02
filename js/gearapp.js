@@ -21,6 +21,7 @@ const DIFF = {
   returned_not_in_box: 'tercatat kembali, tapi tidak ada',
   missing: 'tidak keluar, tapi tidak ada',
   sunset_missing: 'belum kembali dari Sunset Boat',
+  rented_while_out: 'disewa di resepsi, tapi tercatat di tempat lain',
 };
 const lastUse = l => !l ? 'belum pernah dipakai' : l.kind === 'sunset' ? `Sunset Boat, ${dayText(l.from)}`
   : `${l.kind === 'volunteer' ? 'Volunteer' : 'sewa'}, ${l.guest}, ${dayText(l.from)}${l.returned ? ' → kembali ' + dayText(l.returned) + ' ' + hhmm(l.returned) : ''}`;
@@ -62,8 +63,7 @@ function renderLogin() {
     if (!u.trim() || !p) { $('#le').textContent = 'Isi nama pengguna dan kata sandi.'; return; }
     b.disabled = true; b.textContent = 'Memeriksa…';
     try {
-      const user = await login(u, p);
-      if (user.role !== 'gear') { await logout(user); throw new Error('Akun ini untuk resepsi. Gunakan akun staf gear.'); }
+      const user = await login(u, p, { gearApp: true });
       ui.user = user; ui.notice = '';
       b.textContent = 'Memuat…'; await pullNow(); pushNow();
       render();
@@ -112,7 +112,7 @@ function sunset(g) {
       <h1>Kembali</h1>
       <p class="muted">Berangkat ${hhmm(open.at)} · ${open.items.length} masker. Sentuh masker yang sudah kembali.</p>
       ${grid(its, 'six', it => ui.sel.has(it.id) ? 'on' : '')}
-      ${missing.length && ui.sel.size ? `<div class="phwarn">${missing.length} belum kembali: ${missing.map(short).join(', ')}. Jika disimpan sekarang, menjadi selisih untuk resepsionis.</div>` : ''}
+      ${missing.length && ui.sel.size ? `<div class="phwarn">${missing.length} belum kembali: ${esc(missing.map(short).join(', '))}. Jika disimpan sekarang, menjadi selisih untuk resepsionis.</div>` : ''}
       <button type="button" class="primary wide" data-save="back"${ui.sel.size || ui.sure ? '' : ' disabled'}>${ui.sure ? `Ya, simpan: ${missing.length} jadi selisih` : `Simpan kembali (${ui.sel.size}/${open.items.length})`}</button>
       ${!ui.sel.size ? '<button type="button" class="ghost wide" data-save="none">Tidak ada yang kembali</button>' : ''}
     </div>`;
@@ -236,6 +236,7 @@ document.addEventListener('click', async e => {
   }
   if (ds.save === 'back' || ds.save === 'none') {
     const open = g.trips.find(t => !t.closed);
+    if (!open) { ui.screen = 'home'; render(); return; }
     const missing = open.items.filter(id => !ui.sel.has(id));
     if (missing.length && !ui.sure) { ui.sure = true; render(); return; }
     b.disabled = true;

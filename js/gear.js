@@ -13,6 +13,7 @@ const DIFF_TEXT = {
   returned_not_in_box: 'Recorded as returned, but not in the box',
   missing: 'Never went out, but not in the box',
   sunset_missing: 'Not back from the Sunset Boat',
+  rented_while_out: 'Rented at the desk while recorded elsewhere',
 };
 const waText = t => `https://wa.me/?text=${encodeURIComponent(t)}`;
 
@@ -43,7 +44,9 @@ export async function renderGear(root, d) {
     let acts = '';
     if (df.reception) acts = `<span class="muted">You confirmed · waiting for the gear staff</span>`;
     else if (!allowed) acts = '';
-    else if (df.kind === 'counted_but_out') {
+    else if (df.kind === 'rented_while_out') {
+      acts = `<button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked · it is with the guest</button>`;
+    } else if (df.kind === 'counted_but_out') {
       acts = `${late && extPrice(it) ? `<label class="check small"><input type="checkbox" data-dfext="${esc(df.id)}"${ui.dfNoExt && ui.dfNoExt[df.id] ? '' : ' checked'}> charge ${late} day${late > 1 ? 's' : ''} extension · ${money(late * extPrice(it))}</label>` : ''}
         <button type="button" class="primary small" data-dfret="${esc(df.id)}">Returned by guest</button>
         <button type="button" class="ghost small" data-dfsite="${esc(df.id)}">Found on site · no extension</button>`;
@@ -67,7 +70,7 @@ export async function renderGear(root, d) {
     return `<li class="gdiff"><b class="gnum">${esc(dm.item)}</b>
       <div><b>${esc(dm.condition)}</b> <span class="muted small">· ${dm.decision === 'pending' ? 'to decide' : dm.decision === 'charge' ? 'charged' : 'not charged'}</span>${dm.pending ? ' <span class="badge wait">Waiting</span>' : ''}
         <div class="muted small">Last use: ${esc(lastUseText(it.last))}</div></div>
-      <div class="gacts">${dm.decision === 'pending' && allowed ? `
+      <div class="gacts">${dm.pending ? '<span class="muted small">Decide once it reached the sheet.</span>' : dm.decision === 'pending' && allowed ? `
         <label class="small">Guest <input data-dmgguest="${esc(dm.id)}" value="${esc(f.guest || '')}" size="12"></label>
         <label class="small">Rp <input data-dmgamt="${esc(dm.id)}" inputmode="numeric" value="${f.amount ? money(f.amount) : ''}" size="8" placeholder="${price ? '' : 'price'}"></label>
         <button type="button" class="primary small" data-dmgcharge="${esc(dm.id)}">Charge guest</button>
@@ -195,7 +198,8 @@ export async function renderGear(root, d) {
     }
     if (ds.dfret || ds.dfsite) {
       b.disabled = true;
-      const df = g.diffs.find(x => x.id === (ds.dfret || ds.dfsite)), it = byId.get(df.item);
+      const df = g.diffs.find(x => x.id === (ds.dfret || ds.dfsite)); if (!df) { d.render(); return; }
+      const it = byId.get(df.item);
       const p = { cfid: newId('F'), diff: df.id, action: ds.dfret ? 'returned' : 'onsite' };
       const late = it && it.last && it.last.kind === 'rental' ? daysLate(it.back) : 0;
       if (ds.dfret && late && extPrice(it) && !(ui.dfNoExt && ui.dfNoExt[df.id])) p.ext = { ts: await nextTs(), days: late, unit: extPrice(it) };

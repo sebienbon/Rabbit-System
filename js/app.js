@@ -51,7 +51,7 @@ function renderStrip(s) {
 
 // ---------- login ----------
 async function renderLogin() {
-  const users = (await db.get('users')) || [];
+  const users = ((await db.get('users')) || []).filter(u => u.role !== 'gear'); // gear staff use gear.html
   $('#who').innerHTML = '';
   const picked = ui.pickedUser;
   let body;

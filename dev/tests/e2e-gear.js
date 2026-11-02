@@ -38,13 +38,13 @@ const step = m => console.log('  ✓ ' + m);
     await desk.fill('#u', 'boss'); await desk.fill('#p', 'boss123'); await desk.check('#reg'); await desk.click('button.primary'); await desk.click('button.primary');
     await desk.waitForSelector('#openForm');
     await desk.click('#logout');
-    // A gear account cannot use the reception.
-    await desk.fill('#u', 'made').catch(() => {});
-    if (await desk.$('#u')) {
-      await desk.fill('#p', 'made123'); await desk.click('button.primary');
-      await desk.waitForFunction(() => /gear app/.test(document.querySelector('#loginErr')?.textContent || ''));
-      step('gear account refused at the reception');
-    }
+    // A gear account cannot use the reception (and is not offered as a tile).
+    assert.strictEqual(await desk.$('[data-user="made"]'), null);
+    await desk.click('[data-act="typed"]');
+    await desk.fill('#u', 'made'); await desk.fill('#p', 'made123'); await desk.click('button.primary');
+    await desk.waitForFunction(() => /gear app/.test(document.querySelector('#loginErr')?.textContent || ''));
+    step('gear account refused at the reception');
+    await desk.click('[data-act="tiles"]');
     await desk.click('[data-user="ayu"]'); await desk.fill('#p', 'ayu123'); await desk.click('button.primary');
     await desk.fill('#cash', '1387750'); await desk.click('#openForm button.primary');
     await desk.waitForSelector('.sell');
