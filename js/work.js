@@ -1,6 +1,6 @@
 import { db } from './db.js';
 import { enqueue } from './sync.js';
-import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash, partnerView, billNet, tsFromMs } from './ledger.js';
+import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash, partnerView, billNet, tsFromMs, lastSettlementView, cardLines, cardAmount } from './ledger.js';
 import { money, parseMoney } from './shift.js';
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
@@ -66,6 +66,7 @@ export async function renderWork(root, ctx) {
   else if (tab === 'expenses') renderExpenses(root, d);
   else if (tab === 'cash') await renderCash(root, d);
   else if (tab === 'partners') await renderPartners(root, d);
+  else if (tab === 'card') await renderCard(root, d);
 }
 
 // ---------------------------------------------------------------- sell
@@ -868,3 +869,93 @@ function printBill(id, ls, user) {
 }
 
 export const partnerBusy = ui => ui.tab === 'partners' && !!((ui.partner && ui.partner.confirm) || ui.billPay || ui.billDel);
+
+// ---------------------------------------------------------------- card terminal
+// The old Card Trans. sheet: the terminal's settlement totals against the card payments
+// recorded since the previous settlement, minus the bank fee.
+const FEE_KEEP = 0.970875, BIG_DIFF = 5000;
+const tsLabel = ts => ts ? `${ts.slice(6, 8)}/${ts.slice(4, 6)} ${ts.slice(8, 10)}:${ts.slice(10, 12)}` : '';
+
+async function renderCard(root, d) {
+  const { ui } = d;
+  const last = await lastSettlementView();
+  const lines = cardLines(d.lines, last && last.ts);
+  const card = lines.reduce((s, l) => s + cardAmount(l), 0);
+  const allowed = d.user.role !== 'staff' || (d.shift && d.shift.user === d.user.username);
+  const cs = ui.card = ui.card || { s1: null, s2: null, local: null, comment: '', sure: false };
+  const calc = () => {
+    const total = (cs.s1 || 0) + (cs.s2 || 0);
+    const net = total * FEE_KEEP + (cs.local || 0);
+    return { total, net, diff: card - net };
+  };
+  const field = (id, label, v, hint = '') => `<label class="field money"><span>${label}</span>
+    <span class="moneybox"><span class="cur">Rp</span><input id="${id}" inputmode="numeric" autocomplete="off" value="${v ? money(v) : ''}"></span>${hint ? `<small>${hint}</small>` : ''}</label>`;
+  root.innerHTML = `<div class="cashbox">
+    <div class="col">
+      <section class="card">
+        <h2>Card terminal settlement</h2>
+        <p class="muted">${last ? `Previous settlement ${esc(tsLabel(last.ts))}${last.pending ? ' (waiting to be sent)' : ''}.` : 'No previous settlement found.'} Settle the terminal, then type its totals.</p>
+        ${allowed ? `<form id="cardForm" novalidate>
+          ${field('cs1', 'Settlement 1', cs.s1)}
+          ${field('cs2', 'Settlement 2', cs.s2, 'Only if the terminal printed a second settlement.')}
+          ${field('clocal', 'Local card transactions', cs.local, 'Local cards have no 3% fee: name the guests in the comment.')}
+          <label class="field"><span>Comment <em>optional</em></span><input id="ccomment" maxlength="300" value="${esc(cs.comment)}"></label>
+          <dl class="figures compact" id="cardFig"></dl>
+          <p class="diff" id="cardDiff" hidden></p>
+          <button class="primary wide" type="submit">Send settlement</button>
+          <p class="error" role="alert"></p>
+        </form>` : '<p class="muted">Only the person on shift or a manager can send the settlement.</p>'}
+      </section>
+    </div>
+    <div class="col">
+      <section class="card">
+        <h2>Card payments since then</h2>
+        ${lines.length ? `<ul class="plain">${lines.map(l => `<li><span>${esc(tsLabel(l.ts))}</span><span>${esc(l.type === 'Income' ? l.guest : 'Expense ' + l.object)}</span><span class="num">${cardAmount(l) < 0 ? '−' : ''}${money(Math.abs(cardAmount(l)))}</span>${l.pending ? '<span class="badge wait">Waiting</span>' : ''}</li>`).join('')}</ul>` : '<p class="muted">No card payment since the previous settlement.</p>'}
+        <div class="ctotal"><span>Card total in the sheet</span><b class="num">Rp ${money(card)}</b></div>
+      </section>
+    </div>
+  </div>`;
+  const f = root.querySelector('#cardForm');
+  if (!f) return;
+  const err = f.querySelector('.error');
+  const show = () => {
+    const c = calc();
+    f.querySelector('#cardFig').innerHTML = `<div><dt>Total settlement</dt><dd class="num">${money(c.total)}</dd></div>
+      <div><dt>Minus 3% fee${cs.local ? ' + local cards' : ''}</dt><dd class="num">${money(c.net)}</dd></div>`;
+    const el = f.querySelector('#cardDiff');
+    el.hidden = !(cs.s1 || cs.s2 || cs.local);
+    const r = Math.round(c.diff);
+    el.textContent = Math.abs(r) <= BIG_DIFF ? `Difference ${r < 0 ? '−' : ''}${money(Math.abs(r))}: OK` : `Difference ${r < 0 ? '−' : ''}${money(Math.abs(r))}: more than 5.000. Check your operations first.`;
+    el.dataset.tone = Math.abs(r) <= BIG_DIFF ? 'ok' : 'less';
+    const btn = f.querySelector('button[type=submit]');
+    btn.textContent = cs.sure ? 'Send anyway (manager agreed)' : 'Send settlement';
+  };
+  show();
+  f.addEventListener('input', e => {
+    const t = e.target, key = { cs1: 's1', cs2: 's2', clocal: 'local' }[t.id];
+    if (key) { const v = parseMoney(t.value); t.value = v === null ? '' : money(v); cs[key] = v; cs.sure = false; }
+    if (t.id === 'ccomment') cs.comment = t.value;
+    err.textContent = '';
+    show();
+  });
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    const c = calc();
+    if (!cs.s1 && !cs.s2 && !cs.local && card) { err.textContent = 'Type the settlement total printed by the terminal.'; return; }
+    if (Math.abs(c.diff) > BIG_DIFF && !cs.sure) {
+      cs.sure = true; show();
+      err.textContent = 'The difference is over 5.000. Send anyway only if you decided it with your manager: the managers get an alert.';
+      return;
+    }
+    const btn = f.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      await enqueue('card_settlement', { cid: 'C' + Date.now().toString(36) + '-' + crypto.randomUUID().slice(0, 6),
+        s1: cs.s1 || 0, s2: cs.s2 || 0, local: cs.local || 0, comment: cs.comment.trim(), cardTotal: card });
+    } catch (x) { err.textContent = x.message; btn.disabled = false; return; }
+    ui.notice = `Card settlement sent: difference ${money(Math.round(c.diff))}.`;
+    ui.card = null;
+    d.render();
+  });
+}
+export const cardBusy = ui => ui.tab === 'card' && !!(ui.card && (ui.card.s1 || ui.card.s2 || ui.card.local || ui.card.comment));

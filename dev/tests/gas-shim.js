@@ -27,6 +27,7 @@ class Range {
   }
   /** Dates shown as dd/MM/yyyy in the sheet timezone, like the Cashouts&Cor date column. */
   getDisplayValues() { return this.getValues().map(r => r.map(v => (v instanceof Date ? this.sheet.fmt(v, this.sheet.tz, 'dd/MM/yyyy') : String(v)))); }
+  getDisplayValue() { return this.getDisplayValues()[0][0]; }
   getFormulas() { return this.getValues().map(r => r.map(v => (typeof v === 'string' && v.startsWith('=') ? v : ''))); }
   setValue(v) { this.sheet.maybeFail('setValue'); this.sheet.set(this.r, this.c, v); return this; }
   getValue() { return this.getValues()[0][0]; }

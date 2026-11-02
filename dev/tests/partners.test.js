@@ -39,6 +39,10 @@ function freshEnv() {
     'Cashouts&Cor': [['Column 1', 'Time ', 'Cashout', 'Difference', 'Cash in box', 'Change suply', 'Author', 'Comment', 'Type'], ['01/11/2026', '15:00:08', 0, 0, 1000000, '', 'r1@x', '', 'Closing']],
     'Entries': entries, 'Entries Manual': manual, 'Data activities': DA,
     '24datafeed': [['Guest Name', 'First Name', 'Full']], 'New guest': [['', '', '', '', '', 'Bob Sample']],
+    'Settlements': [['Date', 'Time', 'Author', 'Time stamp', 'Difference', 'Total Settlement MIN 3%', 'Total Card Transaction', 'Total Local Card', 'Comment:', 'TOTAL SETTLEMENT', 'AFTER 3% SETTLEMENT 1', 'AFTER 3% SETTLEMENT 2', 'M', 'N'],
+      [day, '14:57:56', 'r1@x', Number(T(0).slice(0, 14) + '000'), 0, 0, 0, '', 'Comment:', 0, 0, 0]],
+    'Protect': [['Tabs Locked', 'Auth Base', 'Auth Level 2', 'Auth Level 1', 'Tabs unlock temporary', 'Email Alerts'],
+      ['', '', '', '', '', 'script-writer@x.iam.gserviceaccount.com'], ['', '', '', '', '', 'alerts@x'], ['', '', '', '', '', 'manager@x']],
   } });
   env.ctx.UI_setup();
   const users = env.book['UI_Users'];
@@ -210,4 +214,58 @@ test('review: a bill being paid (payment written, lines not yet Paid) cannot be 
   const ent = env.book['Entries'];
   ent.appendRow([day, 'Expense', 'Tour', '-Horse Riding', '', '', '', '', 'boss@x', '', '', 650000, 'Payment to Partner', 'Cash', newTs(), '', BILL, '', 'Settled']);
   assert.strictEqual(push(env, boss, op('partner_bill_delete', { bill: BILL })).results[0].error, 'bill_paid');
+});
+
+// ---------------------------------------------------------------- card terminal (step 3e)
+const cid = () => 'C' + (++n) + 'abcdefg';
+test('card settlement: compared with card payments since the last one, written like the old Settlements row', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const pull = env.call({ action: 'pull', token: ayu });
+  assert.strictEqual(pull.settlement.ts, T(0).slice(0, 14) + '000');
+  // Card since then: a 300000 card sale and a 20000 card expense.
+  push(env, ayu, op('sale', { saleId: 'c1', payment: 'Credit / Debit Card', lines: [{ ts: newTs(), guest: 'Zed', object: 'Towel', category: 'Service', qty: 1, unit: 300000, unitCost: 0 }] }));
+  push(env, ayu, op('expense', { ts: newTs(), object: 'Restaurant', amount: 20000, payment: 'Credit / Debit Card', comment: '' }));
+  const c = op('card_settlement', { cid: cid(), s1: 288000, s2: 0, local: 0, comment: 'TEST', cardTotal: 280000 });
+  env.mailFail.next = true;
+  const r = push(env, ayu, c).results[0];
+  assert.strictEqual(r.status, 'applied', JSON.stringify(r));
+  assert.match(r.warning, /not sent/);
+  const row = env.book['Settlements'].data[2];
+  assert.strictEqual(row[2], 'r1@x');
+  assert.strictEqual(String(row[3]).length, 17);
+  assert.strictEqual(row[6], 280000);                     // G card total of the sheet
+  assert.strictEqual(Math.round(row[5]), Math.round(288000 * 0.970875)); // F settlement minus fee
+  assert.strictEqual(Math.round(row[4]), Math.round(280000 - 288000 * 0.970875));
+  assert.match(row[8], /^TEST \[C/);
+  assert.deepStrictEqual([row[9], row[10], row[11], row[12], row[13]], [288000, 288000, 0, 288000 * 0.978, '']);
+  assert.strictEqual(push(env, ayu, c).results[0].status, 'duplicate');
+  assert.strictEqual(env.call({ action: 'pull', token: ayu }).settlement.ts.slice(0, 12), row[3].toFixed(0).slice(0, 12));
+});
+
+test('card settlement: a big difference is alerted to the Protect list; staff need their shift', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  assert.strictEqual(push(env, ayu, op('card_settlement', { cid: cid(), s1: 100000 })).results[0].error, 'forbidden');
+  openShift(env, ayu);
+  const r = push(env, ayu, op('card_settlement', { cid: cid(), s1: 100000, comment: '', cardTotal: 0 })).results[0];
+  assert.strictEqual(r.status, 'applied');
+  const alert = env.mails.find(m => /^Attention! Settlement/.test(m.subject));
+  assert.ok(alert);
+  assert.strictEqual(alert.to, 'alerts@x, manager@x');
+  assert.match(env.book['Settlements'].data[2][8], /^Comment: \(screen showed 0\)|^Comment: \[C/);
+});
+
+test('review: settlement window to the second; refused if out of order or without a previous one', () => {
+  const env = freshEnv();
+  const boss = login(env, 'boss');
+  const ent = env.book['Entries'];
+  const prev = T(0).slice(0, 14);
+  // A card sale in the very second of the previous settlement belongs to it, not to the next one.
+  ent.appendRow([day, 'Income', 'Service', 'Towel', 1, 1000, 1000, 1000, 'r2@x', '', '', '', 'Q', 'Credit / Debit Card', prev + '500', '', '']);
+  const r = push(env, boss, op('card_settlement', { cid: cid(), s1: 0 })).results[0];
+  assert.strictEqual(r.cardTotal, 0);
+  assert.strictEqual(push(env, boss, op('card_settlement', { cid: cid(), s1: 0 }, new Date(Date.now() - 3600000).toISOString())).results[0].error, 'settlement_order');
+  env.book['Settlements'].data.push(['', '', '', 'notes']);
+  assert.strictEqual(push(env, boss, op('card_settlement', { cid: cid(), s1: 0 })).results[0].error, 'no_settlement');
 });

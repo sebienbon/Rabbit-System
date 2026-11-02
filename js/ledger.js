@@ -180,6 +180,22 @@ export async function partnerView() {
 /** What a line adds to its partner bill: its cost, or cost − price when the guest paid the partner. */
 export const billNet = l => Math.round(l.payment === 'Paid to Partner' ? (l.cost || 0) - (l.price || 0) : (l.cost || 0));
 
+/** The last card terminal settlement (its line-id time), including one waiting to be sent. */
+export async function lastSettlementView() {
+  const [snap, ops] = await Promise.all([db.get('settlement'), newerOps()]);
+  let last = snap ? { ts: snap.ts, author: snap.author } : null;
+  for (const { op, pending } of ops) if (op.type === 'card_settlement') last = { ts: tsFromIso(op.at).slice(0, 14) + '000', author: op.author, pending };
+  return last;
+}
+/** Card money recorded after a line id: card sales in, card expenses out (as the sheet counts it). */
+export const isCard = p => /credit|debit/i.test(String(p || ''));
+export function cardLines(lines, afterTs) {
+  const after = (afterTs || '0').slice(0, 14); // to the second, like the Settlements time stamps
+  return lines.filter(l => l.ts.slice(0, 14) > after && isCard(l.payment) && (l.type === 'Income' || l.type === 'Expense'))
+    .sort((a, b) => (a.ts < b.ts ? -1 : 1));
+}
+export const cardAmount = l => (l.type === 'Income' ? (l.total || 0) : -Math.abs(l.cost || 0));
+
 /** Phantom rows recorded during a shift (the sheet keeps whole seconds for them). */
 export function shiftCash(entries, shift) {
   if (!shift) return [];

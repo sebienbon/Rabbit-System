@@ -33,7 +33,9 @@ var UIAPI = (function () {
     entries: 'Entries',
     catalog: 'Data activities',
     feed: '24datafeed',
-    newGuest: 'New guest'
+    newGuest: 'New guest',
+    settlements: 'Settlements',
+    protect: 'Protect'
   };
   var USERS_HEADER = ['Username', 'Display name', 'Role (staff/manager/admin)', 'Author email',
     'Set new password here', 'Password hash', 'Salt', 'Active'];
@@ -269,7 +271,8 @@ var UIAPI = (function () {
       shift: shiftState_(),
       lines: readLines_(),
       cashbox: readCashbox_(),
-      partners: readPartners_()
+      partners: readPartners_(),
+      settlement: lastSettlement_()
     };
     if (sess.reg) {
       // Hashes let the registered reception computer check passwords during an outage.
@@ -686,6 +689,39 @@ var UIAPI = (function () {
     return '';
   }
   function htmlEsc_(v) { return String(v === null || v === undefined ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  // ---------- card terminal (old "18." Card Trans. / Settlements) ----------
+  // At the end of the day the desk types the terminal's settlement totals; the sheet compares
+  // them, minus the 2.9125 % fee (× 0.970875, as in Card Trans.), with the card payments
+  // recorded since the previous settlement. One Settlements row per settlement:
+  // A date, B time, C author, D time stamp (number yyyyMMddHHmmss000), E difference,
+  // F settlement minus fee (+ local cards), G card total of the sheet, H local cards, I comment,
+  // J total settlement, K settlement 1, L settlement 2, M/N the two settlements × 0.978.
+  var FEE_KEEP = 0.970875, BIG_DIFF = 5000;
+  function lastSettlement_() {
+    var s = ss_().getSheetByName(SHEETS.settlements);
+    var n = s ? lastRowIn_(s, 1, 4) : 0;
+    if (n < 2) return null;
+    var r = s.getRange(n, 1, 1, 4).getValues()[0], d = r[3];
+    var ts = typeof d === 'number' ? d.toFixed(0) : String(d).replace(/\D/g, '');
+    if (!/^\d{17}$/.test(ts)) return null;
+    return { ts: ts, time: String(s.getRange(n, 2).getDisplayValue()), author: String(r[2]) };
+  }
+  var isCard_ = function (p) { return /credit|debit/i.test(String(p)); };
+  /**
+   * Card money recorded between two settlements: card sales in, card expenses (column L) out,
+   * as the old Edcopen; compared to the second, like the time stamps of Settlements.
+   */
+  function cardTotal_(ent, from, to) {
+    var total = 0, f = from.slice(0, 14), u = to.slice(0, 14);
+    ent.rows.forEach(function (r) {
+      var t = String(r[E.ts]).slice(0, 14);
+      if (!isTs_(String(r[E.ts])) || t <= f || t > u || !isCard_(r[E.pay])) return;
+      if (String(r[E.type]) === 'Income') total += priceOf_(r);
+      else if (String(r[E.type]) === 'Expense') total -= Math.abs(num_(r[E.realCost]));
+    });
+    return Math.round(total);
+  }
 
   // ---------- push ----------
   // Each handler: validate everything first, then write. Re-running it for the same
@@ -1144,6 +1180,54 @@ var UIAPI = (function () {
       if (touched) col.setValues(st);
       return { rows: out, warning: warn || undefined };
     },
+    /** End-of-day card terminal settlement, as the old Card Trans. → Settlements button. */
+    card_settlement: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var cid = String(p.cid || '');
+      if (!/^C[\w-]{6,40}$/.test(cid)) throw apiError_('bad_payload', 'Invalid id');
+      var s1 = amount_(p.s1 || 0, 'settlement 1'), s2 = amount_(p.s2 || 0, 'settlement 2'), local = amount_(p.local || 0, 'local cards');
+      var comment = text_(p.comment, 300, 'Comment');
+      assertCashRight_(me);
+      var sh = sheet_(SHEETS.settlements);
+      var last = lastRowIn_(sh, 1, 4);
+      var author = me.author || me.username;
+      var mine = -1;
+      if (last >= 2) sh.getRange(2, 9, last - 1, 1).getValues().forEach(function (r, i) { if (String(r[0]).indexOf('[' + cid + ']') >= 0) mine = i + 2; });
+      var row, diff, card, net;
+      if (mine > 0) { // a previous attempt wrote the row: only the emails may be missing
+        row = sh.getRange(mine, 1, 1, 14).getValues()[0];
+        diff = num_(row[4]); net = num_(row[5]); card = num_(row[6]);
+      } else {
+        var prev = lastSettlement_();
+        if (!prev) throw apiError_('no_settlement', 'The last row of Settlements has no time stamp; ask a manager to check the Settlements sheet');
+        var upTo = tsOf_(at);
+        if (upTo.slice(0, 14) <= prev.ts.slice(0, 14)) throw apiError_('settlement_order', 'A later settlement is already in the sheet (' + prev.ts.slice(8, 10) + ':' + prev.ts.slice(10, 12) + '). Ask a manager.');
+        card = cardTotal_(entries_(), prev.ts, upTo);
+        var total = s1 + s2;
+        net = total * FEE_KEEP + local; diff = card - net;
+        var note = p.cardTotal !== undefined && Math.round(Number(p.cardTotal)) !== card ? ' (screen showed ' + Math.round(Number(p.cardTotal)) + ')' : '';
+        row = [dateOnly_(at), fmt_(at, 'HH:mm:ss'), author, Number(upTo.slice(0, 14) + '000'), diff, net, card, local || '',
+          safe_(((comment || 'Comment:') + note + ' [' + cid + ']').trim()), total, s1, s2, s1 ? s1 * 0.978 : '', s2 ? s2 * 0.978 : ''];
+        var r = last + 1;
+        sh.getRange(r, 1, 1, row.length).setValues([row]);
+        sh.getRange(r, 1).setNumberFormat('ddd d mmm');
+      }
+      var warn = [];
+      if (Math.abs(diff) > BIG_DIFF) {
+        var prot = ss_().getSheetByName(SHEETS.protect);
+        var to = prot ? prot.getRange('F2:F6').getValues().map(function (x) { return String(x[0]).trim(); }).filter(function (a) { return a && !/gserviceaccount\.com$/.test(a); }) : [];
+        warn.push(mailOnce_(op, 'cost', { to: to.length ? to : [MAIL.alerts], subject: 'Attention! Settlement with outstanding difference',
+          body: 'A settlement was submitted with a high discrepancy.\n\nAmount: ' + diff + '\nDifference exceeds ' + BIG_DIFF + ' Rp.\n\nBy ' + author + '. Comment: ' + (comment || '-') + '\n\nPlease review the submission.' }));
+      }
+      var head = sh.getRange(1, 1, 1, row.length).getValues()[0];
+      warn.push(mailOnce_(op, 'bill', { to: [author], subject: 'Settlement Data Transferred',
+        html: '<p>The following data has been successfully transferred to the Settlements sheet:</p><table border="1"><tr>' +
+          head.map(function (h) { return '<th>' + htmlEsc_(h) + '</th>'; }).join('') + '</tr><tr>' +
+          row.map(function (v, i) { return '<td>' + htmlEsc_(i === 0 ? fmt_(at, 'dd/MM/yyyy') : v) + '</td>'; }).join('') + '</tr></table><p>This is an automated email.</p>' }));
+      warn = warn.filter(String).join(' ');
+      return { difference: diff, cardTotal: card, net: net, warning: warn || undefined, already: mine > 0 || undefined };
+    },
     shift_open: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
@@ -1281,7 +1365,7 @@ var UIAPI = (function () {
         }
         var vBefore = version_();
         log.appendRow([new Date(), id, String(body.deviceId || ''), who, String(op.type),
-          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs || op.payload.pid || op.payload.bill) || ''), String(op.at || ''), status, detail,
+          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs || op.payload.pid || op.payload.bill || op.payload.cid) || ''), String(op.at || ''), status, detail,
           JSON.stringify(op.payload || {}).slice(0, 45000)]);
         var props_ = PropertiesService.getScriptProperties();
         props_.setProperty('UI_V', String(vBefore + 1));

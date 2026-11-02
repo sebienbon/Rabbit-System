@@ -33,6 +33,9 @@ function seedEnv() {
       }),
     ],
     '24datafeed': [['Guest Name', 'First Name', 'Full'], ['E', 'A', 'Alice Example']],
+    'Settlements': [['Date', 'Time', 'Author', 'Time stamp', 'Difference', 'Total Settlement MIN 3%', 'Total Card Transaction (Spreadsheet)', 'Total Local Card', 'Comment:', 'TOTAL SETTLEMENT', 'AFTER 3% SETTLEMENT 1', 'AFTER 3% SETTLEMENT 2'],
+      [new Date(Date.now() - 86400000), '20:00:00', 'r1@x', Number(new Date(Date.now() - 86400000 + 8 * 3600000).toISOString().replace(/\D/g, '').slice(0, 14) + '000'), 0, 0, 0, '', 'Comment:', 0, 0, 0]],
+    'Protect': [['Tabs Locked', 'Auth Base', 'Auth Level 2', 'Auth Level 1', 'Tabs unlock temporary', 'Email Alerts'], ['', '', '', '', '', 'alerts@x']],
     'New guest': [['', '', '', '', '', 'Bob Sample']],
   } });
   env.ctx.UI_setup();
