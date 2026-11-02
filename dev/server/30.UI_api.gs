@@ -899,7 +899,9 @@ var UIAPI = (function () {
         if (String(orig[E.type]) !== 'Income' || String(orig[E.obj]) === 'Cash Supply') throw apiError_('bad_payload', 'Only a sale can be refunded');
         if (String(orig[E.pay]) === 'Unpaid') throw apiError_('bad_payload', 'This sale was never paid; delete or change it instead');
         if (String(orig[E.comment]) === 'Refunded') throw apiError_('already_refunded', 'This sale was already refunded');
-        if (me.role === 'staff' && pay !== String(orig[E.pay])) throw apiError_('forbidden', 'Refund with the same payment type as the sale (' + orig[E.pay] + '), or ask a manager');
+        // Any payment type (a card refund is often impossible after a day), but a change needs a reason.
+        if (pay !== String(orig[E.pay]) && !String(p.reason || '').trim()) throw apiError_('bad_payload', 'Say why the refund is not paid back by ' + orig[E.pay]);
+        if (pay === 'Paid to Partner' && String(orig[E.pay]) !== 'Paid to Partner') throw apiError_('bad_payment', 'Paid to Partner is not a way to pay back a guest');
         var paid = num_(orig[E.real] !== '' ? orig[E.real] : orig[E.total]);
         if (amount <= 0 || amount > paid) throw apiError_('bad_amount', 'Refund must be between 1 and ' + paid);
       }

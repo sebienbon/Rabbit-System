@@ -372,13 +372,18 @@ test('refunded sales and refund lines are locked for staff; a manager edit keeps
   assert.strictEqual(findE(env, ts)[16], 'Refunded');
 });
 
-test('staff refund must use the payment type of the sale', () => {
+test('a refund can be paid back another way (card refund impossible after a day), with a reason', () => {
   const env = freshEnv();
-  const ayu = login(env, 'ayu'), boss = login(env, 'boss'); openShift(env, ayu);
-  let r = push(env, ayu, op('refund', { origTs: RECENT, newTs: newTs(), amount: 1000, payment: 'Credit / Debit Card' }));
-  assert.strictEqual(r.results[0].error, 'forbidden');
-  r = push(env, boss, op('refund', { origTs: RECENT, newTs: newTs(), amount: 1000, payment: 'Credit / Debit Card' }));
+  const ayu = login(env, 'ayu'); openShift(env, ayu); // the sale RECENT was paid Cash
+  let r = push(env, ayu, op('refund', { origTs: RECENT, newTs: newTs(), amount: 1000, payment: 'Transfer/Others' }));
+  assert.strictEqual(r.results[0].error, 'bad_payload', 'another payment type needs a reason');
+  r = push(env, ayu, op('refund', { origTs: RECENT, newTs: newTs(), amount: 1000, payment: 'Paid to Partner', reason: 'x' }));
+  assert.strictEqual(r.results[0].error, 'bad_payment');
+  const ok = op('refund', { origTs: RECENT, newTs: newTs(), amount: 1000, payment: 'Transfer/Others', reason: 'guest left, bank transfer' });
+  r = push(env, ayu, ok);
   assert.strictEqual(r.results[0].status, 'applied');
+  assert.strictEqual(env.book['Entries'].data.find(x => x[14] === ok.payload.newTs)[13], 'Transfer/Others');
+  assert.match(env.book['UI_Log'].data.slice(-1)[0][8], /guest left, bank transfer/);
 });
 
 test('an operation signed offline by a manager on the reception computer only gets staff rights', () => {

@@ -332,3 +332,4 @@ ul.plain li .num { margin-left: auto; }
 @media (max-width: 900px) { .partners { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .plines li { grid-template-columns: 24px minmax(0, 1fr) 100px; } .plines .when { display: none; } .plines .pcost { grid-column: 2 / -1; } }
 .phwarn { background: var(--warn-bg); color: var(--warn); border-radius: var(--radius-sm); padding: 10px 14px; font-weight: 700; margin: 0 0 14px; }
+.reqif { font-style: normal; font-weight: 400; color: var(--ink-soft); margin-left: 4px; }

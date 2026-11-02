@@ -267,8 +267,8 @@ function lineRow(l, d, { showDay = false } = {}) {
   } else if (ui.refunding === l.ts) {
     extra = `<form class="inline" data-refform="${esc(l.ts)}">
       <label>Amount to give back <span class="moneyin"><span class="cur">Rp</span><input name="amount" inputmode="numeric" value="${money(l.total)}"></span></label>
-      <label>Paid back by <select name="payment"${d.user.role === 'staff' ? ' disabled title="Same as the sale. A manager can choose another."' : ''}>${d.payments.filter(p => p !== 'Unpaid').map(p => `<option${p === l.payment ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
-      <label class="grow">Reason <input name="reason" maxlength="300" placeholder="Why the refund"></label>
+      <label>Paid back by <select name="payment">${d.payments.filter(p => p !== 'Unpaid' && (p !== 'Paid to Partner' || l.payment === p)).map(p => `<option${p === l.payment ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+      <label class="grow">Reason <em class="reqif">required if not paid back by ${esc(payLabel(l.payment))}</em><input name="reason" maxlength="300" placeholder="Why the refund"></label>
       <div class="row"><button class="primary small" type="submit">Refund</button><button class="ghost small" type="button" data-cancel>Cancel</button></div>
       <p class="error" role="alert"></p></form>`;
   }
@@ -361,8 +361,9 @@ function bindLineActions(root, d) {
       if (!l) return;
       const amount = parseMoney(f.amount.value);
       if (!amount || amount > l.total) { err.textContent = `Enter an amount between 1 and ${money(l.total)}.`; return; }
+      const payBack = f.payment.value;
+      if (payBack !== l.payment && !f.reason.value.trim()) { err.textContent = `Say why it is not paid back by ${payLabel(l.payment)} (e.g. card refund no longer possible).`; f.reason.focus(); return; }
       btn.disabled = true;
-      const payBack = d.user.role === 'staff' ? l.payment : f.payment.value;
       await enqueue('refund', { origTs: l.ts, newTs: await nextTs(), amount, payment: payBack, reason: f.reason.value.trim() });
       ui.refunding = null; ui.notice = `Refund recorded: Rp ${money(amount)} to ${l.guest}, ${payLabel(payBack)}.`;
       d.render();

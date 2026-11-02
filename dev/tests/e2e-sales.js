@@ -132,6 +132,11 @@ const step = m => console.log('  ✓ ' + m);
 
     // ---- refund ----
     await lineOf('Alice Example', 'Towel').locator('[data-refund]').click();
+    // Another payment type is allowed, but needs a reason.
+    await page.selectOption('form[data-refform] select[name="payment"]', 'Transfer/Others');
+    await page.click('form[data-refform] button[type=submit]');
+    assert.match(await page.textContent('form[data-refform] .error'), /Say why it is not paid back by Cash/);
+    await page.selectOption('form[data-refform] select[name="payment"]', 'Cash');
     await page.fill('form[data-refform] input[name="reason"]', 'wet towel');
     await page.click('form[data-refform] button[type=submit]');
     await waitNotice(/Refund recorded: Rp 50\.000 to Alice Example, Cash/);
