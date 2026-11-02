@@ -3,7 +3,8 @@ import { CONFIG } from './config.js';
 import { login, logout, currentUser, isRegistered } from './auth.js';
 import { startSync, onStatus, pushNow, pullNow, dismissRejected } from './sync.js';
 import { currentShift, cashInBoxBeforeOpening, expectedCash, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
-import { renderWork, workTabs, cartBusy } from './work.js';
+import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy } from './work.js';
+const cartBusy = ui => saleBusy(ui) || expenseBusy(ui);
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -161,7 +162,7 @@ async function renderShift() {
   const mine = shift.user === ui.user.username;
   const expected = await expectedCash(shift);
   const wt = await workTabs({ ui, user: ui.user, shift });
-  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
+  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
   html += `<section class="card shift">
     <div class="shifthead">
       <h2>${mine ? 'Your shift' : `${esc(shift.userName && shift.userName !== shift.user ? shift.userName : nameOf(shift.user))}'s shift`}</h2>
@@ -253,6 +254,7 @@ async function renderShift() {
 function bindTabs() {
   main().querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
     ui.tab = b.dataset.tab; ui.closing = null; ui.editing = ui.deleting = ui.refunding = null;
+    if (!expenseBusy(ui)) ui.expense = null;
     render();
   });
 }
@@ -265,10 +267,11 @@ function showError(root, err) {
 
 function attention(rejected) {
   if (!rejected.length) return '';
-  const label = { shift_open: 'Open shift', shift_close: 'Close shift', sale: 'Sale', line_update: 'Change', line_delete: 'Delete', settle: 'Bill payment', refund: 'Refund' };
+  const label = { shift_open: 'Open shift', shift_close: 'Close shift', sale: 'Sale', line_update: 'Change', line_delete: 'Delete', settle: 'Bill payment', refund: 'Refund', expense: 'Expense' };
   const what = r => {
     const p = r.payload || {};
     if (r.type === 'sale') return (p.lines || []).map(l => `${l.object.replace(/^-/, '')} for ${l.guest}`).slice(0, 3).join(', ') + ` (${p.payment})`;
+    if (r.type === 'expense') return `${p.object}: Rp ${money(p.amount)} (${p.payment})`;
     return '';
   };
   return `<section class="card attention" id="attention">

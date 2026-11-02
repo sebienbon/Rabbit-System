@@ -16,7 +16,7 @@ const DA = [
   ['Activity', 'Selling Price', 'Purchase prices', '', '', '', '', '', 'Category', 'Sub-category - Income', 'Staff', 'Service', 'Transport', 'Tour', 'Other', 'Paid', 'Payment type'],
   ['Snorkeling Mask', '30,000Rp', '', '', '', '', '', '', 'Income', 'Room', 'Boss', 'Snorkeling Mask', '-Shuttle Bangsal / Kuta', '-Horse Riding', 'Rooms', 'To agent', 'Cash'],
   ['Towel', '50,000Rp', '', '', '', '', '', '', 'Expense', 'Bar', 'Food', 'Towel', '', '', 'Restaurant', '', 'Credit / Debit Card'],
-  ['Laundry', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Laundry', '', '', '', '', 'Transfer/Others'],
+  ['Laundry', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Laundry', '', '', 'other', '', 'Transfer/Others'],
   ['-Horse Riding', '400,000Rp', '350,000Rp', '', '', '', '', '', '', '', '', 'Bar', '', '', '', '', 'Unpaid'],
   ['-Shuttle Bangsal / Kuta', '160,000Rp', '90,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Paid to Partner'],
   ['Bar'],
@@ -429,4 +429,123 @@ test('a staff member\'s own unpaid sale, paid later in the shift, stays hers to 
   push(env, ayu, op('settle', { payment: 'Cash', items: [{ oldTs: s.payload.lines[0].ts, newTs: nts }] }));
   assert.strictEqual(push(env, ayu, op('line_update', { ts: nts, qty: 2 })).results[0].status, 'applied');
   assert.strictEqual(env.call({ action: 'pull', token: ayu }).lines.find(l => l.ts === nts).soldBy, 'ayu');
+});
+
+// ---------------------------------------------------------------- expenses
+const expense = (object, amount, payment = 'Cash', extra = {}) => op('expense', { ts: newTs(), object, amount, payment, ...extra });
+
+test('expense: written like the old Daily Expenses dialog, in both sheets, and New guest once', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const e1 = expense('Restaurant', 70000, 'Cash', { comment: 'telur 1 trai' });
+  let r = push(env, ayu, e1);
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  const e = findE(env, e1.payload.ts);
+  assert.deepStrictEqual(e.slice(1, 17), ['Expense', 'Other', 'Restaurant', '', '', '', '', 'r1@x', '', '', 70000, 'ExpenseRestaurant', 'Cash', e1.payload.ts, '', 'telur 1 trai']);
+  assert.ok(e[0] instanceof Date);
+  const m = findM(env, e1.payload.ts);
+  assert.deepStrictEqual([m[1], m[2], m[3], m[11], m[12], m[13], m[14], m[15], m[5]], ['Expense', 'Other', 'Restaurant', 70000, 'ExpenseRestaurant', 'Cash', 'r1@x', 'telur 1 trai', '=f']);
+  const ng = () => env.book['New guest'].data.filter(x => x[2] === 'ExpenseRestaurant');
+  assert.strictEqual(ng().length, 1); assert.strictEqual(ng()[0][5], 'ExpenseRestaurant');
+  push(env, ayu, expense('Restaurant', 1000));
+  assert.strictEqual(ng().length, 1, 'added only once');
+  // The pseudo-guest never shows up in the guest list.
+  assert.ok(!env.call({ action: 'pull', token: ayu }).guests.some(g => /^Expense/.test(g)));
+});
+
+test('expense: "Others" maps to the item "other" (the old dialog lost these); unknown items refused', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const o = expense('other', 25000);
+  assert.strictEqual(push(env, ayu, o).results[0].status, 'applied');
+  assert.strictEqual(findE(env, o.payload.ts)[2], 'Other');
+  const l = expense('Laundry', 10000);
+  push(env, ayu, l);
+  assert.strictEqual(findE(env, l.payload.ts)[2], 'Service', 'first column listing it, like the old dialog');
+  assert.strictEqual(push(env, ayu, expense('Others', 1)).results[0].error, 'bad_payload');
+  assert.strictEqual(push(env, ayu, expense('Restaurant', 1, 'Paid to Partner')).results[0].error, 'bad_payment');
+  assert.strictEqual(push(env, ayu, expense('Restaurant', 0)).results[0].error, 'bad_amount');
+});
+
+test('expense: chosen date kept (yesterday), refused if older than a month', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const y = new Date(Date.now() - 86400000 + 8 * 3600000).toISOString().slice(0, 10);
+  const e1 = expense('Restaurant', 5000, 'Cash', { date: y });
+  push(env, ayu, e1);
+  const d = findE(env, e1.payload.ts)[0];
+  assert.strictEqual(new Date(d.getTime() + 8 * 3600000).toISOString().slice(0, 10), y);
+  const old = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10);
+  assert.strictEqual(push(env, ayu, expense('Restaurant', 5000, 'Cash', { date: old })).results[0].error, 'bad_time');
+});
+
+test('expense: Google failure halfway, retry completes without a second line', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const e1 = expense('Restaurant', 9000);
+  env.book['Entries Manual'].failNext = 'setValues';
+  assert.ok(push(env, ayu, e1).partial);
+  assert.strictEqual(push(env, ayu, e1).results[0].status, 'applied');
+  assert.strictEqual(entriesRows(env).filter(x => x[14] === e1.payload.ts).length, 1);
+  assert.strictEqual(manualRows(env).filter(x => x[16] === e1.payload.ts).length, 1);
+});
+
+test('expense: counts against the cash in the box; its author can fix the amount, a colleague cannot', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), dewa = login(env, 'dewa');
+  const id = openShift(env, ayu); // opening 100000
+  const e1 = expense('Restaurant', 30000);
+  push(env, ayu, e1);
+  push(env, ayu, expense('Restaurant', 20000, 'Credit / Debit Card')); // not from the box
+  assert.strictEqual(push(env, dewa, op('line_update', { ts: e1.payload.ts, amount: 1 })).results[0].error, 'forbidden');
+  let r = push(env, ayu, op('line_update', { ts: e1.payload.ts, amount: 35000, comment: 'with drinks' }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  assert.deepStrictEqual([findE(env, e1.payload.ts)[11], findM(env, e1.payload.ts)[11], findM(env, e1.payload.ts)[15]], [35000, 35000, 'with drinks']);
+  assert.strictEqual(push(env, ayu, op('line_update', { ts: RECENT, amount: 1 })).results[0].error, 'forbidden');
+  r = push(env, ayu, op('shift_close', { shiftId: id, cashCounted: 65000, expectedCash: 65000 }));
+  assert.strictEqual(r.results[0].expected, 65000);
+  assert.strictEqual(r.results[0].difference, 0);
+  assert.strictEqual(env.call({ action: 'pull', token: ayu }).lines.find(l => l.ts === e1.payload.ts).soldBy, 'ayu');
+});
+
+test('review: a comment that looks like a formula survives a retry as text in Entries Manual', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const e1 = expense('Restaurant', 9000, 'Cash', { comment: '+62 812 3456 (supplier)' });
+  env.book['Entries Manual'].failNext = 'setValues';
+  assert.ok(push(env, ayu, e1).partial);
+  findE(env, e1.payload.ts)[16] = '+62 812 3456 (supplier)'; // what the sheet gives back: apostrophe gone
+  assert.strictEqual(push(env, ayu, e1).results[0].status, 'applied');
+  assert.strictEqual(findM(env, e1.payload.ts)[15], "'+62 812 3456 (supplier)");
+  const m = findM(env, e1.payload.ts);
+  assert.deepStrictEqual([m[5], m[6], m[9], m[10]], ['=f', '=g', '=j', '=k'], 'formulas of the row kept');
+});
+
+test('review: an expense line accepts only amount, payment and comment changes', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), boss = login(env, 'boss'); openShift(env, ayu);
+  const e1 = expense('Restaurant', 9000);
+  push(env, ayu, e1);
+  for (const change of [{ unit: 1e9 }, { qty: 2 }, { guest: 'X' }]) {
+    assert.strictEqual(push(env, boss, op('line_update', { ts: e1.payload.ts, ...change })).results[0].error, 'bad_payload');
+  }
+  assert.strictEqual(push(env, boss, op('line_update', { ts: e1.payload.ts, payment: 'Paid to Partner' })).results[0].error, 'bad_payment');
+  assert.strictEqual(findE(env, e1.payload.ts)[7], '', 'no income written on the expense');
+});
+
+test('review: an expense id reused with another amount is a collision, not a takeover', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), dewa = login(env, 'dewa'); openShift(env, ayu);
+  const e1 = expense('Restaurant', 9000);
+  push(env, ayu, e1);
+  const fake = { ...e1, id: 'other-op', payload: { ...e1.payload, amount: 1 } };
+  assert.strictEqual(push(env, dewa, fake).results[0].error, 'ts_collision');
+});
+
+test('review: expense dates are checked as calendar days', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const tomorrow = new Date(Date.now() + 86400000 + 8 * 3600000).toISOString().slice(0, 10);
+  assert.strictEqual(push(env, ayu, expense('Restaurant', 1, 'Cash', { date: tomorrow })).results[0].error, 'bad_time');
+  assert.strictEqual(push(env, ayu, expense('Restaurant', 1, 'Cash', { date: '2026-02-31' })).results[0].error, 'bad_time');
 });

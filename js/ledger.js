@@ -38,9 +38,15 @@ export function applyOps(lines, ops) {
           unit: l.unit, total, unitCost: l.unitCost || 0, cost, author: op.author || '', guest: l.guest,
           payment: p.payment, comment: l.comment || '', saleId: p.saleId, soldBy: op.by }));
       }
+    } else if (op.type === 'expense') {
+      if (byTs.has(p.ts)) { if (pending) byTs.get(p.ts).pending = true; continue; }
+      byTs.set(p.ts, mark({ ts: p.ts, type: 'Expense', category: '', object: p.object, qty: null, unit: 0, total: 0,
+        unitCost: 0, cost: p.amount, author: op.author || '', guest: 'Expense' + p.object, payment: p.payment,
+        comment: p.comment || '', soldBy: op.by, label: p.label }));
     } else if (op.type === 'line_update') {
       const l = byTs.get(p.ts);
       if (!l) continue;
+      if (p.amount !== undefined) l.cost = p.amount;
       if (p.qty !== undefined) l.qty = p.qty;
       if (p.unit !== undefined) l.unit = p.unit;
       if (p.qty !== undefined || p.unit !== undefined) {
@@ -109,7 +115,7 @@ const REFUND_MARKS = ['Refunded', 'Refunding'];
 export function canChange(line, user, shift) {
   if (!user) return false;
   if (user.role !== 'staff') return true;
-  return !!shift && shift.status === 'open' && shift.user === user.username && line.type === 'Income' &&
+  return !!shift && shift.status === 'open' && shift.user === user.username && (line.type === 'Income' || line.type === 'Expense') &&
     !REFUND_MARKS.includes(line.comment) && line.soldBy === user.username && line.ts >= tsFromIso(shift.openedAt);
 }
 export const canRefund = l => l.type === 'Income' && l.payment !== 'Unpaid' && l.comment !== 'Refunded' && !l.pending;

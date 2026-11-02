@@ -13,6 +13,19 @@ const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ
 const PAY_SHORT = { 'Credit / Debit Card': 'Card', 'Transfer/Others': 'Transfer' };
 const payLabel = p => PAY_SHORT[p] || p;
 
+// The ten buttons of the old Daily Expenses dialog, with the item it writes in column D.
+// "Others" writes "other", the word listed in Data activities (the old dialog lost these).
+export const EXPENSE_ITEMS = [
+  { label: 'Restaurant', object: 'Restaurant', tone: 'food' }, { label: 'Bar', object: 'Bar', tone: 'food' },
+  { label: 'Water Refill', object: 'Water Refill', tone: 'food' },
+  { label: 'Maintenance', object: 'Maintenance', tone: 'house' }, { label: 'Cleaning', object: 'Cleaning', tone: 'house' },
+  { label: "Guest's Amenities", object: "Guest's services", tone: 'house' },
+  { label: 'Bike Maintenance', object: 'Rabbit bike', tone: 'serv' }, { label: 'Utilities', object: 'Utilities', tone: 'serv' },
+  { label: 'Laundry', object: 'Laundry', tone: 'serv' },
+  { label: 'Others', object: 'other', tone: 'other' },
+];
+const expenseLabel = obj => (EXPENSE_ITEMS.find(x => x.object === obj) || {}).label || obj;
+
 export function newCart() { return { guests: [], items: [], payment: null, comment: '' }; }
 export const cartBusy = ui => !!(ui.cart && (ui.cart.items.length || ui.cart.guests.length));
 
@@ -22,7 +35,7 @@ async function load(ctx) {
     ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests')]);
   const names = new Map();
   for (const g of guestList || []) names.set(norm(g), g);
-  for (const l of lines) if (l.guest && !names.has(norm(l.guest))) names.set(norm(l.guest), l.guest);
+  for (const l of lines) if (l.guest && l.type === 'Income' && !names.has(norm(l.guest))) names.set(norm(l.guest), l.guest);
   const unpaid = new Map();
   for (const l of lines) if (l.type === 'Income' && l.payment === 'Unpaid') {
     const u = unpaid.get(l.guest) || { guest: l.guest, total: 0, count: 0, oldest: l.ts };
@@ -37,7 +50,7 @@ export async function workTabs(ctx) {
   const d = await load(ctx);
   const mine = shiftLines(d.lines, ctx.shift);
   const t = totals(mine);
-  return { counts: { bills: d.unpaid.size, shift: mine.length }, totals: t };
+  return { counts: { bills: d.unpaid.size, shift: mine.length, expenses: mine.filter(l => l.type === 'Expense' && l.comment !== 'Refunding').length }, totals: t };
 }
 
 export async function renderWork(root, ctx) {
@@ -46,6 +59,7 @@ export async function renderWork(root, ctx) {
   if (tab === 'sell') renderSell(root, d);
   else if (tab === 'bills') renderBills(root, d);
   else if (tab === 'shift') renderShiftLines(root, d);
+  else if (tab === 'expenses') renderExpenses(root, d);
 }
 
 // ---------------------------------------------------------------- sell
@@ -217,16 +231,24 @@ function renderSell(root, d) {
 function lineRow(l, d, { showDay = false } = {}) {
   const { ui } = d;
   const isExp = l.type === 'Expense';
+  const isSpend = isExp && l.comment !== 'Refunding'; // a daily expense, not a refund
   const amount = isExp ? -(l.cost || 0) : (l.total || 0);
-  const edit = !isExp && canChange(l, d.user, d.shift);
+  const edit = canChange(l, d.user, d.shift) && (!isExp || isSpend); // refund lines: delete only
   const del = canChange(l, d.user, d.shift);
   const ref = canRefund(l);
   let extra = '';
-  if (ui.editing === l.ts) {
+  if (ui.editing === l.ts && isSpend) {
+    extra = `<form class="inline" data-expform="${esc(l.ts)}">
+      <label>Amount <span class="moneyin"><span class="cur">Rp</span><input name="amount" inputmode="numeric" value="${money(l.cost || 0)}"></span></label>
+      <label>Paid with <select name="payment">${[...new Set([l.payment, ...d.payments.filter(p => p !== 'Paid to Partner')])].map(p => `<option${p === l.payment ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+      <label class="grow">Comment <input name="comment" maxlength="300" value="${esc(l.comment)}"></label>
+      <div class="row"><button class="primary small" type="submit">Save</button><button class="ghost small" type="button" data-cancel>Cancel</button></div>
+      <p class="error" role="alert"></p></form>`;
+  } else if (ui.editing === l.ts) {
     extra = `<form class="inline" data-editform="${esc(l.ts)}">
       <label>Qty <input name="qty" inputmode="decimal" value="${esc(l.qty ?? '')}"${l.qty == null ? ' placeholder="—"' : ''}></label>
       <label>Price per unit <span class="moneyin"><span class="cur">Rp</span><input name="unit" inputmode="numeric" value="${money(l.unit || 0)}"></span></label>
-      <label>Payment <select name="payment">${d.payments.map(p => `<option${p === l.payment ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+      <label>Payment <select name="payment">${[...new Set([l.payment, ...d.payments])].map(p => `<option${p === l.payment ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <label>Guest <input name="guest" value="${esc(l.guest)}"></label>
       <label class="grow">Comment <input name="comment" value="${esc(l.comment === 'Refunded' ? '' : l.comment)}"${l.comment === 'Refunded' ? ' disabled' : ''}></label>
       <div class="row"><button class="primary small" type="submit">Save</button><button class="ghost small" type="button" data-cancel>Cancel</button></div>
@@ -250,7 +272,7 @@ function lineRow(l, d, { showDay = false } = {}) {
   ].join('');
   return `<li class="line${isExp ? ' exp' : ''}${ui.editing === l.ts || ui.refunding === l.ts ? ' open' : ''}">
     <span class="when">${showDay ? lineDay(l.ts) + ' ' : ''}${lineTime(l.ts)}</span>
-    <span class="what"><b>${esc(l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${esc(l.guest)}</span></span>
+    <span class="what"><b>${esc(isSpend ? expenseLabel(l.object) : l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${isSpend ? 'Expense' : esc(l.guest)}</span></span>
     <span class="tags">${tags}${status}</span>
     <span class="amt num">${amount < 0 ? '−' : ''}${money(Math.abs(amount))}</span>
     <span class="acts">${edit ? `<button class="link" type="button" data-edit="${esc(l.ts)}">Edit</button>` : ''}${del ? `<button class="link" type="button" data-del="${esc(l.ts)}">Delete</button>` : ''}${ref ? `<button class="link" type="button" data-refund="${esc(l.ts)}">Refund</button>` : ''}</span>
@@ -273,7 +295,8 @@ function bindLineActions(root, d) {
       b.disabled = true;
       const l = byTs(b.dataset.delok);
       await enqueue('line_delete', { ts: b.dataset.delok });
-      ui.deleting = null; ui.notice = `Deleted: ${l ? l.object.replace(/^-/, '') + ' for ' + l.guest : 'line'}.`;
+      ui.deleting = null;
+      ui.notice = !l ? 'Line deleted.' : l.type === 'Expense' ? `Deleted: ${expenseLabel(l.object)} expense of Rp ${money(l.cost)}.` : `Deleted: ${l.object.replace(/^-/, '')} for ${l.guest}.`;
       d.render();
     }
   });
@@ -301,6 +324,19 @@ function bindLineActions(root, d) {
       btn.disabled = true;
       if (Object.keys(change).length) await enqueue('line_update', { ts: l.ts, ...change });
       ui.editing = null; ui.notice = Object.keys(change).length ? 'Line updated.' : null;
+      d.render();
+    } else if (f.dataset.expform) {
+      const l = byTs(f.dataset.expform);
+      if (!l) return;
+      const amount = parseMoney(f.amount.value);
+      if (!amount || amount > 1e9) { err.textContent = 'Enter the amount.'; return; }
+      const change = {};
+      if (amount !== l.cost) change.amount = amount;
+      if (f.payment.value !== l.payment) change.payment = f.payment.value;
+      if (f.comment.value.trim() !== (l.comment || '')) change.comment = f.comment.value.trim();
+      btn.disabled = true;
+      if (Object.keys(change).length) await enqueue('line_update', { ts: l.ts, ...change });
+      ui.editing = null; ui.notice = Object.keys(change).length ? 'Expense updated.' : null;
       d.render();
     } else if (f.dataset.refform) {
       const l = byTs(f.dataset.refform);
@@ -427,3 +463,75 @@ function renderShiftLines(root, d) {
   </section>`;
   bindLineActions(root, d);
 }
+
+// ---------------------------------------------------------------- expenses
+function todayLocal() {
+  const d = new Date(Date.now() + 8 * 3600000); // reception time (UTC+8)
+  return d.toISOString().slice(0, 10);
+}
+
+function renderExpenses(root, d) {
+  const { ui } = d;
+  // date stays empty unless changed: "today" is decided when the expense is recorded.
+  const ex = ui.expense = ui.expense || { item: null, payment: null, amount: null, date: '', comment: '' };
+  const pays = d.payments.filter(p => p !== 'Paid to Partner');
+  const mine = shiftLines(d.lines, d.shift).filter(l => l.type === 'Expense' && l.comment !== 'Refunding');
+  const minDate = new Date(Date.now() + 8 * 3600000 - 30 * 86400000).toISOString().slice(0, 10);
+  root.innerHTML = `<div class="expenses">
+    <section class="card">
+      <h2>New expense</h2>
+      <form id="expForm" novalidate>
+        <fieldset class="field"><legend>What for</legend>
+          <div class="eitems">${EXPENSE_ITEMS.map(it => `<button type="button" class="eitem ${it.tone}${ex.item === it.object ? ' on' : ''}" data-item="${esc(it.object)}" aria-pressed="${ex.item === it.object}">${esc(it.label)}</button>`).join('')}</div>
+        </fieldset>
+        <label class="field money"><span>Amount</span>
+          <span class="moneybox"><span class="cur">Rp</span><input id="expAmount" inputmode="numeric" autocomplete="off" value="${ex.amount ? money(ex.amount) : ''}"></span></label>
+        <fieldset class="field"><legend>Paid with</legend>
+          <div class="pays">${pays.map(p => `<button type="button" class="pay${ex.payment === p ? ' on' : ''}" data-epay="${esc(p)}" aria-pressed="${ex.payment === p}">${esc(payLabel(p))}</button>`).join('')}</div>
+        </fieldset>
+        <div class="row2">
+          <label class="field"><span>Date</span><input id="expDate" type="date" min="${minDate}" max="${todayLocal()}" value="${esc(ex.date || todayLocal())}"></label>
+          <label class="field grow"><span>Comment <em>optional</em></span><input id="expComment" maxlength="300" value="${esc(ex.comment)}" placeholder="What exactly, for whom"></label>
+        </div>
+        <button class="primary wide" type="submit">Record expense</button>
+        <p class="error" role="alert"></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>Expenses in this shift</h2>
+      ${mine.length ? `<ul class="lines">${mine.map(l => lineRow(l, d)).join('')}</ul>
+        <div class="ctotal"><span>Total</span><b class="num">Rp ${money(mine.reduce((s, l) => s + (l.cost || 0), 0))}</b></div>`
+        : '<p class="muted">No expense in this shift yet.</p>'}
+    </section>
+  </div>`;
+  bindLineActions(root, d);
+  const f = root.querySelector('#expForm');
+  const err = f.querySelector('.error');
+  f.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.item) { ex.item = b.dataset.item; f.querySelectorAll('[data-item]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); root.querySelector('#expAmount').focus(); }
+    if (b.dataset.epay) { ex.payment = b.dataset.epay; f.querySelectorAll('[data-epay]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); }
+  });
+  f.addEventListener('input', e => {
+    const t = e.target;
+    if (t.id === 'expAmount') { const v = parseMoney(t.value); t.value = v === null ? '' : money(v); ex.amount = v; }
+    if (t.id === 'expComment') ex.comment = t.value;
+    if (t.id === 'expDate') ex.date = t.value === todayLocal() ? '' : t.value;
+  });
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!ex.item) { err.textContent = 'Choose what the expense is for.'; return; }
+    if (!ex.amount || ex.amount > 1e9) { err.textContent = 'Enter the amount.'; root.querySelector('#expAmount').focus(); return; }
+    if (!ex.payment) { err.textContent = 'Choose how it was paid.'; return; }
+    const date = ex.date || todayLocal();
+    if (date > todayLocal() || date < minDate) { err.textContent = 'Choose a date within the last month.'; return; }
+    f.querySelector('button[type=submit]').disabled = true;
+    await enqueue('expense', { ts: await nextTs(), object: ex.item, amount: ex.amount, payment: ex.payment, date, comment: ex.comment.trim() });
+    ui.notice = `Expense recorded: ${expenseLabel(ex.item)}, Rp ${money(ex.amount)}, ${payLabel(ex.payment)}.`;
+    ui.expense = null;
+    d.render();
+  });
+}
+
+export const expenseBusy = ui => !!(ui.expense && (ui.expense.amount || ui.expense.comment));

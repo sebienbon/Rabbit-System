@@ -13,8 +13,8 @@ function seedEnv() {
     'Entries Manual': manual,
     'Data activities': [
       ['Activity', 'Selling Price', 'Purchase prices', '', '', '', '', '', 'Category', 'Sub-category - Income', 'Staff', 'Service', 'Transport', 'Tour', 'Other', 'Paid', 'Payment type'],
-      ['Towel', '50,000Rp', '', '', '', '', '', '', '', '', '', 'Towel', '-Shuttle Bangsal / Kuta', '-Horse Riding', '', '', 'Cash'],
-      ['Laundry', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Laundry', '', '-Snorkeling Trip', '', '', 'Credit / Debit Card'],
+      ['Towel', '50,000Rp', '', '', '', '', '', '', '', '', '', 'Towel', '-Shuttle Bangsal / Kuta', '-Horse Riding', 'Restaurant', '', 'Cash'],
+      ['Laundry', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Laundry', '', '-Snorkeling Trip', 'other', '', 'Credit / Debit Card'],
       ['Bar', '', '', '', '', '', '', '', '', '', '', 'Bar', '', '', '', '', 'Transfer/Others'],
       ['-Horse Riding', '400,000Rp', '350,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Unpaid'],
       ['-Shuttle Bangsal / Kuta', '160,000Rp', '90,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Paid to Partner'],

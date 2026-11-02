@@ -253,3 +253,18 @@ select { font: inherit; color: inherit; padding: 10px 12px; border: 1.5px solid 
   .split { grid-template-columns: 1fr; gap: 0; }
   .prods { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 }
+
+/* expenses */
+.expenses { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+fieldset.field { border: 0; padding: 0; min-width: 0; }
+fieldset.field legend { font-weight: 700; padding: 0; margin-bottom: 6px; }
+.eitems { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.eitem { padding: 12px 10px; font-weight: 700; border: 1.5px solid var(--line); background: var(--bg); color: var(--ink); border-left-width: 5px; text-align: left; }
+.eitem.food { border-left-color: #2E9E5B; }
+.eitem.house { border-left-color: #D9A21B; }
+.eitem.serv { border-left-color: var(--blue); }
+.eitem.other { border-left-color: #8A94A6; grid-column: 1 / -1; }
+.eitem.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.row2 { display: grid; grid-template-columns: 170px 1fr; gap: 12px; }
+@media (max-width: 900px) { .expenses { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .eitems { grid-template-columns: 1fr 1fr; } .row2 { grid-template-columns: 1fr; } }

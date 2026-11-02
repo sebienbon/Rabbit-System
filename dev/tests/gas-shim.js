@@ -25,6 +25,7 @@ class Range {
     vals.forEach((row, i) => row.forEach((v, j) => this.sheet.set(this.r + i, this.c + j, v)));
     return this;
   }
+  getFormulas() { return this.getValues().map(r => r.map(v => (typeof v === 'string' && v.startsWith('=') ? v : ''))); }
   setValue(v) { this.sheet.set(this.r, this.c, v); return this; }
   getValue() { return this.getValues()[0][0]; }
   setNumberFormat(f) { this.sheet.formats.push([this.r, this.c, f]); return this; }

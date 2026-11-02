@@ -317,7 +317,7 @@ var UIAPI = (function () {
       var s = ss_().getSheetByName(sheetName);
       if (!s || s.getLastRow() < 2) return;
       s.getRange(2, col, s.getLastRow() - 1, 1).getValues().forEach(function (r) {
-        var n = String(r[0]).trim(); if (n) names[n] = true;
+        var n = String(r[0]).trim(); if (n && !/^Expense/.test(n)) names[n] = true;
       });
     }
     add(SHEETS.feed, 3);
@@ -360,6 +360,8 @@ var UIAPI = (function () {
         if (r[1] === 'sale') {
           var user = String(r[0]).split(' ')[0];
           (JSON.parse(r[6]).lines || []).forEach(function (l) { out[String(l.ts)] = user; });
+        } else if (r[1] === 'expense') {
+          out[String(JSON.parse(r[6]).ts)] = String(r[0]).split(' ')[0];
         } else if (r[1] === 'settle') { // a paid bill keeps its seller under its new id
           (JSON.parse(r[6]).items || []).forEach(function (it) { if (out[String(it.oldTs)]) out[String(it.newTs)] = out[String(it.oldTs)]; });
         }
@@ -391,6 +393,8 @@ var UIAPI = (function () {
 
   function tsOf_(d) { return Utilities.formatDate(d, TS_TZ, 'yyyyMMddHHmmssSSS'); }
   function isTs_(v) { return /^\d{17}$/.test(String(v)); }
+  /** Text read back from the sheet loses its protecting apostrophe: add it again before writing. */
+  function safe_(v) { return typeof v === 'string' && /^[=+@]/.test(v) ? "'" + v : v; }
   /** A sheet cell never starts a formula from typed text. */
   function text_(v, max, field) {
     var t = String(v === undefined || v === null ? '' : v).replace(/\s+/g, ' ').trim();
@@ -401,6 +405,15 @@ var UIAPI = (function () {
     var n = Number(v);
     if (!isFinite(n) || n <= 0 || n > 1000) throw apiError_('bad_amount', 'Invalid quantity');
     return Math.round(n * 100) / 100;
+  }
+  /** Sub-category of an expense item: header of the first column (L..O) listing it, scanning row by row like the old dialog. */
+  function expenseCategory_(obj) {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    if (!s || !obj) return '';
+    var head = s.getRange(1, 12, 1, 4).getValues()[0];
+    var rows = s.getRange(2, 12, 29, 4).getValues();
+    for (var i = 0; i < rows.length; i++) for (var j = 0; j < 4; j++) if (String(rows[i][j]).trim() === obj) return String(head[j]).trim();
+    return '';
   }
   function payment_(v, allowUnpaid) {
     var p = String(v || '').trim();
@@ -429,7 +442,7 @@ var UIAPI = (function () {
     if (!rows.length) return;
     var r = ent.last + 1;
     ent.sheet.getRange(r, E.ts + 1, rows.length, 1).setNumberFormat('@');
-    ent.sheet.getRange(r, 1, rows.length, 17).setValues(rows);
+    ent.sheet.getRange(r, 1, rows.length, 17).setValues(rows.map(function (row) { return row.map(safe_); }));
     ent.sheet.getRange(r, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
     ent.last += rows.length;
   }
@@ -437,12 +450,17 @@ var UIAPI = (function () {
   function appendManual_(man, entryRows) {
     if (!entryRows.length) return;
     var r = man.last + 1, n = entryRows.length, s = man.sheet;
+    var rng = s.getRange(r, 1, n, 17);
+    var formulas = rng.getFormulas(), current = rng.getValues();
+    var keep = function (i, c) { return formulas[i][c] || current[i][c]; }; // F, G, J, K stay as they are
+    var rows = entryRows.map(function (e, i) {
+      return [e[E.date], e[E.type], e[E.sub], e[E.obj], e[E.qty], keep(i, 5), keep(i, 6), e[E.real], '', keep(i, 9), keep(i, 10),
+        e[E.realCost], e[E.guest], e[E.pay], e[E.author], e[E.comment], e[E.ts]].map(function (v, c) {
+          return [5, 6, 9, 10].indexOf(c) >= 0 ? v : safe_(v);
+        });
+    });
     s.getRange(r, M.ts + 1, n, 1).setNumberFormat('@');
-    s.getRange(r, 1, n, 5).setValues(entryRows.map(function (e) { return [e[E.date], e[E.type], e[E.sub], e[E.obj], e[E.qty]]; }));
-    s.getRange(r, M.real + 1, n, 2).setValues(entryRows.map(function (e) { return [e[E.real], '']; }));
-    s.getRange(r, M.realCost + 1, n, 6).setValues(entryRows.map(function (e) {
-      return [e[E.realCost], e[E.guest], e[E.pay], e[E.author], e[E.comment], e[E.ts]];
-    }));
+    rng.setValues(rows); // one write: a failure never leaves half a row
     s.getRange(r, 1, n, 1).setNumberFormat('dd/MM/yyyy');
     man.last += n;
   }
@@ -481,9 +499,9 @@ var UIAPI = (function () {
     if (me.role !== 'staff') return;
     var sh = myOpenShift_(me);
     var ts = String(row[E.ts]);
-    var ok = sh && String(row[E.type]) === 'Income' && REFUND_MARKS.indexOf(String(row[E.comment])) < 0 &&
+    var ok = sh && ['Income', 'Expense'].indexOf(String(row[E.type])) >= 0 && REFUND_MARKS.indexOf(String(row[E.comment])) < 0 &&
       soldBy_()[ts] === me.username && ts >= tsOf_(new Date(sh[COL.openedAt]));
-    if (!ok) throw apiError_('forbidden', 'Only sales you entered during your own open shift can be changed. Ask a manager.');
+    if (!ok) throw apiError_('forbidden', 'Only sales and expenses you entered during your own open shift can be changed. Ask a manager.');
   }
   function lineTs_(v, at) {
     var t = String(v || '');
@@ -544,12 +562,22 @@ var UIAPI = (function () {
       var row = ent.rows[rowNo - 2].slice();
       assertCanChange_(me, row);
       var before = lineOut_(row);
+      var isExp = String(row[E.type]) === 'Expense';
+      if (isExp && (p.qty !== undefined || p.unit !== undefined || p.guest !== undefined)) {
+        throw apiError_('bad_payload', 'An expense only has an amount, a payment type and a comment');
+      }
+      if (isExp && p.payment === 'Paid to Partner') throw apiError_('bad_payment', 'Paid to Partner is not used for expenses');
       if (p.qty !== undefined || p.unit !== undefined) {
         var q = p.qty !== undefined ? qty_(p.qty) : (num_(row[E.qty]) || 1);
         var unit = p.unit !== undefined ? amount_(p.unit, 'price') : num_(row[E.unit]);
         var total = Math.round(q * unit);
         row[E.qty] = q; row[E.unit] = unit; row[E.total] = total; row[E.real] = total;
         if (row[E.unitCost] !== '') { var cost = Math.round(q * num_(row[E.unitCost])); row[E.cost] = cost; row[E.realCost] = cost; }
+      }
+      if (p.amount !== undefined) {
+        if (String(row[E.type]) !== 'Expense') throw apiError_('bad_payload', 'Only an expense has an amount to change');
+        row[E.realCost] = amount_(p.amount, 'amount');
+        if (row[E.realCost] <= 0) throw apiError_('bad_amount', 'Invalid amount');
       }
       if (p.payment !== undefined) row[E.pay] = payment_(p.payment, true);
       if (p.guest !== undefined) { row[E.guest] = text_(p.guest, 120, 'Guest'); if (!row[E.guest]) throw apiError_('bad_payload', 'Guest is required'); }
@@ -668,6 +696,48 @@ var UIAPI = (function () {
       var mOrig = man.byTs[origTs];
       if (mOrig) { verify_(man.sheet, mOrig, M.ts + 1, origTs); man.sheet.getRange(mOrig, M.comment + 1).setValue('Refunded'); }
       return existing ? { already: true } : { audit: { before: lineOut_(orig), reason: String(p.reason || '').slice(0, 300) } };
+    },
+    /**
+     * A daily expense, as the old Daily Expenses dialog wrote it: B Expense, C the header of
+     * the Data activities column (L..O) where the item is listed, D the item, L the amount,
+     * M "Expense"+item, N payment; and "Expense"+item added to New guest once.
+     */
+    expense: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      var ts = lineTs_(p.ts, at);
+      var pay = payment_(p.payment, true);
+      if (pay === 'Paid to Partner') throw apiError_('bad_payment', 'Paid to Partner is not used for expenses');
+      var amount = amount_(p.amount, 'amount');
+      if (amount <= 0) throw apiError_('bad_amount', 'Invalid amount');
+      var obj = String(p.object || '').trim();
+      var category = expenseCategory_(obj);
+      if (!category) throw apiError_('bad_payload', obj + ' is not in Data activities (columns L to O)');
+      var day = dateOnly_(at);
+      if (p.date) {
+        var ds = String(p.date);
+        var parsed = /^\d{4}-\d{2}-\d{2}$/.test(ds) ? Utilities.parseDate(ds, tz_(), 'yyyy-MM-dd') : null;
+        if (!parsed || fmt_(parsed, 'yyyy-MM-dd') !== ds || ds > fmt_(at, 'yyyy-MM-dd') ||
+            ds < fmt_(new Date(at.getTime() - 31 * 86400000), 'yyyy-MM-dd')) throw apiError_('bad_time', 'The date must be within the last month');
+        day = parsed;
+      }
+      var guest = 'Expense' + obj;
+      var row = [day, 'Expense', category, obj, '', '', '', '', me.author || me.username, '', '', amount, guest, pay, ts, '', text_(p.comment, 300, 'Comment')];
+      var ent = entries_(), man = manual_();
+      var ex = ent.row(ts);
+      if (ex && (String(ex[E.type]) !== 'Expense' || !same_(ex[E.obj], obj) || num_(ex[E.realCost]) !== amount ||
+          String(ex[E.pay]) !== pay || String(ex[E.author]) !== row[E.author])) {
+        throw apiError_('ts_collision', 'The sheet already has a different line with this id. Nothing was written.');
+      }
+      if (!ex) appendEntries_(ent, [row]);
+      if (!man.byTs[ts]) appendManual_(man, [row]);
+      var ng = ss_().getSheetByName(SHEETS.newGuest);
+      if (ng) {
+        var last = lastRowIn_(ng, 1, 6);
+        var known = last >= 1 && ng.getRange(1, 3, last, 1).getValues().some(function (r) { return String(r[0]) === guest; });
+        if (!known) ng.getRange(last + 1, 3, 1, 4).setValues([[guest, new Date(), '', guest]]);
+      }
+      return ex ? { already: true } : {};
     },
     shift_open: function (op, me) {
       var p = op.payload || {};
