@@ -59,7 +59,7 @@ function fail(err) {
   const wait = Math.min(5 * 60000, 5000 * 2 ** Math.min(failures, 6));
   nextPushAt = Date.now() + wait;
   nextPullAt = Math.max(nextPullAt, Date.now() + wait);
-  if (err.code === 'no_session') emit({ state: 'expired', message: 'Log in while connected to send the waiting operations.' });
+  if (err.code === 'no_session') emit({ state: 'expired', message: 'Your session ended: log in again to send them.' });
   else if (err.network) emit({ state: 'offline', message: err.message });
   else emit({ state: 'error', message: err.message });
 }
@@ -70,7 +70,12 @@ async function doPush() {
   if (!outbox.length) { if (status.state === 'sending') emit({ state: 'idle' }); return; }
   let token = await db.get('deviceToken');
   if (!token) token = await reconnect();
-  if (!token) { emit({ state: 'expired', message: 'Log in while connected to send the waiting operations.' }); return; }
+  if (!token) {
+    // No session: while the Internet is still down this is just "offline"; once it is back, ask for the password.
+    if (!navigator.onLine) emit({ state: 'offline', message: 'No Internet connection' });
+    else emit({ state: 'expired', message: 'Your password is needed once to send them.' });
+    return;
+  }
   emit({ state: 'sending' });
   try {
     const slice = outbox.slice(0, BATCH);

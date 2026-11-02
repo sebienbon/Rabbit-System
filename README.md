@@ -4,7 +4,7 @@ Interface de réception hors ligne de Rabbit Tree. Le staff travaille dans cette
 
 - **Interface** : les fichiers à la racine (`index.html`, `js/`, …), servis par GitHub Pages. Elle garde tout dans le navigateur et envoie les opérations au Sheet en arrière-plan, même après une coupure Internet de plusieurs heures.
 - **Serveur** : `dev/server/30.UI_api.gs`, à coller dans le projet Apps Script lié au Sheet, publié en application web (exécuter en tant que : moi, accès : tout le monde).
-- **Tests** : dans `dev/`, `npm i` puis `node --test tests/*.test.js` (serveur sur un faux Sheet), `node tests/e2e.js` (shifts), `node tests/e2e-sales.js` (ventes) `node tests/e2e-expenses.js` (dépenses) `node tests/e2e-cash.js` (caisse) `node tests/e2e-partners.js` (partenaires) et `node tests/e2e-card.js` (terminal carte), dans Chrome avec coupure simulée.
+- **Tests** : dans `dev/`, `npm i` puis `node --test tests/*.test.js` (serveur sur un faux Sheet), `node tests/e2e.js` (shifts), `node tests/e2e-sales.js` (ventes) `node tests/e2e-expenses.js` (dépenses) `node tests/e2e-cash.js` (caisse) `node tests/e2e-partners.js` (partenaires) , `node tests/e2e-card.js` (terminal carte) et `node tests/e2e-restart.js` (coupure + redémarrage de l'ordinateur), dans Chrome avec coupure simulée.
 
 ## Ce que fait l'interface
 - Ouverture et fermeture de shift (Cashouts&Cor, ligne Cash-out dans Entries Manual).

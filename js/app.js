@@ -33,7 +33,17 @@ function renderStrip(s) {
   else { title = 'Connected'; detail = s.lastSync ? `Everything is in the sheet. Last check ${time(s.lastSync)}.` : 'Everything is in the sheet.'; }
   el.dataset.tone = tone;
   el.innerHTML = `<span class="dot" aria-hidden="true"></span><strong>${esc(title)}</strong><span class="detail">${esc(detail)}</span>` +
-    (s.rejected ? `<a href="#attention" class="attn">${s.rejected} need${s.rejected === 1 ? 's' : ''} attention</a>` : '');
+    (s.rejected ? `<a href="#attention" class="attn">${s.rejected} need${s.rejected === 1 ? 's' : ''} attention</a>` : '') +
+    (s.state === 'expired' && ui.user ? '<button type="button" class="ghost small relog" id="relog">Log in again to send</button>' : '');
+  // After a restart during a cut, the sheet needs a password once the Internet is back:
+  // logging in again keeps everything waiting on this computer and sends it.
+  const relog = el.querySelector('#relog');
+  if (relog) relog.onclick = async () => {
+    const name = ui.user.username;
+    await logout(ui.user); ui.user = null; ui.pickedUser = name; ui.typedUser = false;
+    ui.notice = 'Type your password: what is waiting will be sent to the sheet.';
+    render();
+  };
 }
 
 // ---------- login ----------
@@ -347,6 +357,8 @@ async function boot() {
   onStatus(renderStrip);
   onStatus((s, evt) => { if (evt && (evt.pulled || evt.pushed)) afterSync(); });
   ui.user = await currentUser();
+  // Ask the browser to keep this computer's data even when the disk gets full.
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
   await render();
   startSync();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
