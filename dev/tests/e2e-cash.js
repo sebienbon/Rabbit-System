@@ -34,7 +34,7 @@ const step = m => console.log('  ✓ ' + m);
 
   try {
     await page.goto(base);
-    await page.fill('#u', 'boss'); await page.fill('#p', 'boss123'); await page.check('#reg'); await page.click('button.primary');
+    await page.fill('#u', 'boss'); await page.fill('#p', 'boss123'); await page.check('#reg'); await page.click('button.primary'); await page.click('button.primary');
     await page.waitForSelector('#openForm');
     await page.click('#logout');
     await page.click('[data-user="ayu"]'); await page.fill('#p', 'ayu123'); await page.click('button.primary');
@@ -72,11 +72,13 @@ const step = m => console.log('  ✓ ' + m);
     await page.click('[data-solveok]');
     await waitNotice(/Phantom cash solved: change for Elias/);
     assert.strictEqual(await figure(3), 'Rp 995.000');
+    assert.strictEqual(await page.locator('.phantoms li').filter({ hasText: 'change for Elias' }).locator('[data-solve]').count(), 0, 'a solved phantom leaves "Not solved yet" at once');
     await ctx.setOffline(true);
     await page.reload();
     await page.waitForSelector('.shift');
     await tab('cash');
     assert.ok((await page.$$('.badge.wait')).length >= 2);
+    assert.strictEqual(await page.locator('.phantoms li').filter({ hasText: 'change for Elias' }).locator('[data-solve]').count(), 0, 'still gone after a reload');
     assert.strictEqual(await figure(3), 'Rp 995.000');
     await page.screenshot({ path: `${shots}/c02-cash-offline.png`, fullPage: true });
     step('during the cut: a second phantom and solving the first, kept after a reload');

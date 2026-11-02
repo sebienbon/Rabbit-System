@@ -83,7 +83,14 @@ async function renderLogin() {
     e.preventDefault();
     const u = $('#u').value, p = $('#p').value;
     if (!u || !p) { $('#loginErr').textContent = 'Enter your username and password.'; return; }
-    const btn = f.querySelector('button.primary'); btn.disabled = true; btn.textContent = 'Checking…';
+    const btn = f.querySelector('button.primary');
+    // Registering the reception computer is a manager's decision: ask once more.
+    if ($('#reg')?.checked && btn.dataset.sure !== '1') {
+      btn.dataset.sure = '1'; btn.textContent = 'Yes, make this the reception computer';
+      $('#loginErr').textContent = 'This computer will keep the team’s login data for Internet cuts. Untick the box if this is not the reception computer.';
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'Checking…';
     try {
       ui.user = await login(u, p, { register: !!$('#reg')?.checked });
       ui.pickedUser = null; ui.typedUser = false;
@@ -91,7 +98,7 @@ async function renderLogin() {
       render();
     } catch (err) {
       $('#loginErr').textContent = err.message;
-      btn.disabled = false; btn.textContent = 'Log in';
+      btn.disabled = false; btn.textContent = 'Log in'; btn.dataset.sure = '';
       $('#p').value = ''; $('#p').focus();
     }
   });
@@ -230,6 +237,7 @@ async function renderShift() {
 
   html += `<section class="card"><h2>Close the shift</h2>
     <form id="closeForm" novalidate>
+      ${phantom ? `<p class="phwarn">Phantom cash of this shift is included: ${phantom < 0 ? '−' : '+'}${money(Math.abs(phantom))}. Count only the cash really in the box.</p>` : ''}
       ${moneyField('cash', 'Cash counted in the box')}
       ${moneyField('cashout', 'Cash taken out', 'Money you remove from the box and hand over. Leave empty if none.')}
       <p class="diff" id="diff" hidden></p>

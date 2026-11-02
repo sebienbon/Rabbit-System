@@ -32,7 +32,7 @@ const step = m => console.log('  ✓ ' + m);
 
   try {
     await page.goto(base);
-    await page.fill('#u', 'boss'); await page.fill('#p', 'boss123'); await page.check('#reg'); await page.click('button.primary');
+    await page.fill('#u', 'boss'); await page.fill('#p', 'boss123'); await page.check('#reg'); await page.click('button.primary'); await page.click('button.primary');
     await page.waitForSelector('#openForm');
     await page.click('#logout');
     await page.click('[data-user="ayu"]'); await page.fill('#p', 'ayu123'); await page.click('button.primary');
