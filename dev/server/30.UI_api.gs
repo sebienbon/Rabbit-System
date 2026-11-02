@@ -764,7 +764,7 @@ var UIAPI = (function () {
   var GEAR_SETTINGS_DEFAULT = [['Part / setting', 'Price (Rp)', 'Note'], ['Snorkel', '', ''], ['Mask (without snorkel)', '', ''],
     ['Ring', '', ''], ['Full snorkeling set (lost)', '', ''], ['Bike — repair', '', 'reception types the amount if empty'],
     ['Extension per day — mask', 30000, ''], ['Extension per day — bike', '', ''], ['Mask rental product', 'Snorkeling Mask', 'name in Data activities'],
-    ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', '+62…']];
+    ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', 'number in column B, e.g. +62 812…']];
   var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Broken', 'Lost'];
   var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1 }; // what the gear role may send
   /**
@@ -796,8 +796,12 @@ var UIAPI = (function () {
   }
   function gearSettings_() {
     var s = ss_().getSheetByName(SHEETS.gearSettings), map = {};
-    var rows = s && s.getLastRow() >= 2 ? s.getRange(2, 1, s.getLastRow() - 1, 2).getValues() : GEAR_SETTINGS_DEFAULT.slice(1);
+    var rows = s && s.getLastRow() >= 2 ? s.getRange(2, 1, s.getLastRow() - 1, 3).getValues() : GEAR_SETTINGS_DEFAULT.slice(1);
     rows.forEach(function (r) { if (String(r[0]).trim()) map[String(r[0]).trim()] = r[1]; });
+    // The number is sometimes typed in the Note column: take it there when B is empty.
+    rows.forEach(function (r) {
+      if (String(r[0]).trim() === 'Manager WhatsApp' && !String(r[1] || '').trim() && /\d{8,}/.test(String(r[2] || '').replace(/\D/g, ''))) map['Manager WhatsApp'] = r[2];
+    });
     var price = function (k) { var v = map[k]; return v === '' || v === undefined || v === null ? null : num_(v); };
     return {
       prices: { 'Snorkel missing': price('Snorkel'), 'Ring missing': price('Ring'), 'Broken': price('Mask (without snorkel)'),
@@ -887,6 +891,7 @@ var UIAPI = (function () {
         it.where = 'in'; it.back = null; it.condition = e.d.condition || 'OK';
         if (it.last) it.last.returned = e.at.toISOString();
       } else if (e.type === 'sunset_out') {
+        if (!(e.d.items || []).length) return; // every number touched was already out: only differences, no trip
         trips[e.ref] = trips[e.ref] || { trip: e.ref, at: e.at.toISOString(), by: e.by, items: [], back: [], closed: false };
         (e.d.items || []).forEach(function (id) {
           var x = items[id]; if (!x || trips[e.ref].items.indexOf(id) >= 0) return;

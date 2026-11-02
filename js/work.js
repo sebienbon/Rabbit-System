@@ -147,6 +147,11 @@ function renderSell(root, d) {
   const addGuest = name => {
     name = String(name || '').replace(/\s+/g, ' ').trim();
     if (!name) return;
+    if (cart.items.some(it => it.gear) && cart.guests.length && !cart.guests.some(g => norm(g) === norm(name))) {
+      const er = cartEl.querySelector('#saleErr');
+      if (er) er.textContent = 'Rent masks and bikes for one guest at a time: record this sale first.';
+      sugEl.hidden = true; return;
+    }
     if (!cart.guests.some(g => norm(g) === norm(name))) cart.guests.push(name);
     sugEl.hidden = true;
     renderGuests(); renderCart();
@@ -205,6 +210,7 @@ function renderSell(root, d) {
       const ex = cart.items.find(x => x.name === p.name && x.category === p.category);
       const kind = gearKind(p.name);
       if (ex && kind) { cartEl.querySelector(`[data-gearin="${cart.items.indexOf(ex)}"]`)?.focus(); return; }
+      if (kind && cart.guests.length > 1) { const er = cartEl.querySelector('#saleErr'); if (er) er.textContent = 'Rent masks and bikes for one guest at a time: keep one guest in this sale.'; return; }
       if (ex) ex.qty++; else cart.items.push({ name: p.name, category: p.category, qty: 1, unit: p.price || 0, unitCost: p.cost || 0, ...(kind ? { gear: [], kind } : {}) });
       renderCart(); renderProds();
       if (kind) cartEl.querySelector(`[data-gearin="${cart.items.length - 1}"]`)?.focus();
@@ -223,7 +229,7 @@ function renderSell(root, d) {
     const it = cart.items[i], ul = cartEl.querySelector(`[data-gearsug="${i}"]`);
     if (!it || !ul) return;
     const n = String(q || '').trim().toUpperCase();
-    const list = available(it.kind).filter(x => !n || x.id.includes(n)).slice(0, 8);
+    const list = available(it.kind).filter(x => !n || x.id.includes(n)); // all of them; the list scrolls
     ul.innerHTML = list.length ? list.map(x => `<li><button type="button" data-gearpick="${i}:${esc(x.id)}">${esc(x.id)}</button></li>`).join('')
       : `<li class="muted">${n ? 'No available number matches.' : 'No ' + it.kind + ' in stock.'}</li>`;
     ul.hidden = false;
@@ -238,6 +244,8 @@ function renderSell(root, d) {
     cartEl.querySelector(`[data-gearin="${i}"]`)?.focus();
   };
   root.addEventListener('focusin', e => { if (e.target.dataset && e.target.dataset.gearin !== undefined) showNumbers(+e.target.dataset.gearin, e.target.value); });
+  // A click in a field that already has the focus opens the list too.
+  root.addEventListener('pointerup', e => { if (e.target.dataset && e.target.dataset.gearin !== undefined) showNumbers(+e.target.dataset.gearin, e.target.value); });
   root.addEventListener('focusout', e => {
     if (e.target.dataset && e.target.dataset.gearin !== undefined) setTimeout(() => { const ul = cartEl.querySelector(`[data-gearsug="${e.target.dataset.gearin}"]`); if (ul && !ul.contains(document.activeElement)) ul.hidden = true; }, 150);
   });

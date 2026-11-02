@@ -10,7 +10,6 @@ const $ = s => document.querySelector(s);
 const main = () => $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const newId = p => p + Date.now().toString(36) + '-' + crypto.randomUUID().slice(0, 6);
-const short = id => String(id).replace(/^SG/, '');
 const hhmm = iso => (fmtWhen(iso).split(' ').pop() || '');
 const DAYS = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
@@ -19,11 +18,11 @@ const COND = { OK: 'Baik', 'Snorkel missing': 'Snorkel hilang', 'Ring missing': 
 const DIFF = {
   counted_but_out: 'ada di kotak, tapi tercatat keluar',
   returned_not_in_box: 'tercatat kembali, tapi tidak ada',
-  missing: 'tidak keluar, tapi tidak ada',
+  missing: 'tidak pernah keluar, tapi tidak ada di kotak',
   sunset_missing: 'belum kembali dari Sunset Boat',
   rented_while_out: 'disewa di resepsi, tapi tercatat di tempat lain',
 };
-const lastUse = l => !l ? 'belum pernah dipakai' : l.kind === 'sunset' ? `Sunset Boat, ${dayText(l.from)}`
+const lastUse = l => !l ? 'Belum pernah dipakai' : l.kind === 'sunset' ? `Sunset Boat, ${dayText(l.from)}`
   : `${l.kind === 'volunteer' ? 'Volunteer' : 'sewa'}, ${l.guest}, ${dayText(l.from)}${l.returned ? ' → kembali ' + dayText(l.returned) + ' ' + hhmm(l.returned) : ''}`;
 const waLink = (num, text) => `https://wa.me/${String(num || '').replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
 
@@ -75,15 +74,16 @@ function renderLogin() {
 }
 
 // ---------- screens ----------
-const bar = title => `<div class="gabar"><button type="button" class="ghost small" data-go="home">‹ Kembali</button><b>${esc(title)}</b></div>`;
+const bar = title => `<div class="gabar"><button type="button" class="ghost small" data-go="home">‹ Menu</button><b>${esc(title)}</b></div>`;
 const grid = (items, cls, on, extra = () => '') => `<div class="gagrid ${cls}">${items.map(it => {
   const st = on(it);
-  return `<button type="button" class="gacell${st ? ' ' + st : ''}" data-cell="${esc(it.id)}" aria-pressed="${!!st}">${esc(it.kind === 'bike' ? it.id : short(it.id))}${extra(it)}</button>`;
+  return `<button type="button" class="gacell${st ? ' ' + st : ''}" data-cell="${esc(it.id)}" aria-pressed="${!!st}">${esc(it.id)}${extra(it)}</button>`;
 }).join('')}</div>`;
 
 function home(g) {
   const open = g.trips.find(t => !t.closed);
-  const doneTrip = g.trips.filter(t => t.closed).pop();
+  const doneTrips = g.trips.filter(t => t.closed);
+  const dayOut = doneTrips.reduce((n, t) => n + t.items.length, 0), dayBack = doneTrips.reduce((n, t) => n + t.back.length, 0);
   const due = checkDue(g);
   const diffs = g.diffs.length;
   const ask = 'Notification' in window && Notification.permission === 'default';
@@ -91,7 +91,7 @@ function home(g) {
     <h1>${esc(dayText())}</h1>
     ${due ? '<div class="phwarn">Cek malam belum dilakukan hari ini.</div>' : ''}
     <button type="button" class="gatile" data-go="sunset"><b>Sunset Boat</b>
-      <span>${open ? `Berangkat ${hhmm(open.at)} · ${open.items.length} masker · <em>belum kembali</em>` : doneTrip ? `Selesai: ${doneTrip.items.length} berangkat, ${doneTrip.back.length} kembali` : 'Belum berangkat hari ini'}</span>
+      <span>${open ? `Berangkat ${hhmm(open.at)} · ${open.items.length} masker · <em>belum kembali</em>` : doneTrips.length ? `Hari ini: ${dayOut} berangkat, ${dayBack} kembali` : 'Belum berangkat hari ini'}</span>
       <small>Penjualan hari ini: ${g.sunsetSales} tamu</small></button>
     <button type="button" class="gatile${due ? ' due' : ''}" data-go="count"><b>Cek malam</b>
       <span>${g.countedToday ? `Sudah dilakukan ${hhmm(g.lastCount.at)}${g.lastCount.pending ? ' · menunggu dikirim' : ''}` : 'Belum dilakukan · sekitar jam 20:00'}</span></button>
@@ -99,6 +99,7 @@ function home(g) {
       <span>${diffs ? `${diffs} perlu dicek bersama resepsionis` : 'Tidak ada selisih'}</span></button>
     ${g.managerWa ? `<a class="ghost wide gawa" target="_blank" rel="noopener" href="${waLink(g.managerWa, 'Halo, ini staf gear Rabbit Tree. ')}">WhatsApp manajer</a>` : ''}
     ${ask ? '<button type="button" class="ghost wide" data-notify>Aktifkan pengingat jam 20:00</button>' : ''}
+    <p class="muted small center">Pengingat jam 20:00 hanya muncul jika aplikasi ini tetap terbuka di HP.</p>
   </div>`;
 }
 
@@ -112,9 +113,8 @@ function sunset(g) {
       <h1>Kembali</h1>
       <p class="muted">Berangkat ${hhmm(open.at)} · ${open.items.length} masker. Sentuh masker yang sudah kembali.</p>
       ${grid(its, 'six', it => ui.sel.has(it.id) ? 'on' : '')}
-      ${missing.length && ui.sel.size ? `<div class="phwarn">${missing.length} belum kembali: ${esc(missing.map(short).join(', '))}. Jika disimpan sekarang, menjadi selisih untuk resepsionis.</div>` : ''}
-      <button type="button" class="primary wide" data-save="back"${ui.sel.size || ui.sure ? '' : ' disabled'}>${ui.sure ? `Ya, simpan: ${missing.length} jadi selisih` : `Simpan kembali (${ui.sel.size}/${open.items.length})`}</button>
-      ${!ui.sel.size ? '<button type="button" class="ghost wide" data-save="none">Tidak ada yang kembali</button>' : ''}
+      ${missing.length && (ui.sel.size || ui.sure) ? `<div class="phwarn">${missing.length} belum kembali: ${esc(missing.join(', '))}. Jika disimpan sekarang, menjadi selisih untuk resepsionis.</div>` : ''}
+      <button type="button" class="primary wide" data-save="back">${ui.sure ? `Ya, simpan: ${missing.length} jadi selisih` : `Simpan kembali (${ui.sel.size}/${open.items.length})`}</button>
     </div>`;
   }
   const masks = g.items.filter(i => i.kind === 'mask' && !(g.unavailable || []).includes(i.id));
@@ -169,7 +169,7 @@ function diffs(g) {
       const later = ui.later[d.id];
       return `<div class="card gadiff${d.gear ? ' done' : ''}">
         <b>${esc(d.item)} — ${esc(DIFF[d.kind] || d.kind)}</b>
-        <span class="muted small">Terakhir dipakai: ${esc(lastUse(d.last))}</span>
+        <span class="muted small">${d.last ? 'Terakhir dipakai: ' : ''}${esc(lastUse(d.last))}</span>
         ${d.gear ? `<span class="small">Anda sudah konfirmasi${d.pending ? ' (menunggu dikirim)' : ''} · menunggu resepsionis.</span>`
           : later ? `<span class="small">Belum selesai · tetap terbuka. <button type="button" class="ghost small" data-unlater="${esc(d.id)}">Ubah</button></span>`
           : `<div class="garow"><button type="button" class="primary" data-confirm="${esc(d.id)}">${d.kind === 'counted_but_out' ? 'Konfirmasi: ada di sini' : 'Ketemu'}</button>
@@ -234,7 +234,7 @@ document.addEventListener('click', async e => {
     await enqueue('sunset_out', { trip: newId('T'), items: [...ui.sel] });
     ui.notice = `Berangkat: ${ui.sel.size} masker.`; ui.sel = new Set(); ui.screen = 'home'; render(); return;
   }
-  if (ds.save === 'back' || ds.save === 'none') {
+  if (ds.save === 'back') {
     const open = g.trips.find(t => !t.closed);
     if (!open) { ui.screen = 'home'; render(); return; }
     const missing = open.items.filter(id => !ui.sel.has(id));

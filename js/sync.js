@@ -102,6 +102,8 @@ async function doPush() {
       failures = 0;
       emit({ state: 'idle', message: '', lastSync: new Date().toISOString() });
       if (outbox.length > BATCH) nextPushAt = 0;
+      // What the sheet worked out from it (differences, totals) comes back right away.
+      nextPullAt = Math.min(nextPullAt, Date.now() + 2000);
     }
     emit({}, { pushed: r.results });
   } catch (e) {
@@ -139,7 +141,7 @@ async function doPull() {
       if (cur && cur.username === r.me.username) writes.push(['kv', 'put', { ...cur, ...r.me }, 'currentUser']);
     }
     await db.batch(writes);
-    nextPullAt = Date.now() + CONFIG.PULL_EVERY_MS;
+    nextPullAt = Date.now() + (globalThis.RABBIT_PULL_MS || CONFIG.PULL_EVERY_MS);
     if (status.state === 'offline' || status.state === 'error') failures = 0;
     emit(status.pending ? { lastSync: new Date().toISOString() } : { state: 'idle', message: '', lastSync: new Date().toISOString() }, { pulled: true });
   } catch (e) {
@@ -153,7 +155,7 @@ export const pullNow = () => serial(doPull);
 function tick() {
   const now = Date.now();
   if (now >= nextPushAt) { nextPushAt = now + CONFIG.PUSH_EVERY_MS; pushNow(); }
-  if (now >= nextPullAt) { nextPullAt = now + CONFIG.PULL_EVERY_MS; pullNow(); }
+  if (now >= nextPullAt) { nextPullAt = now + (globalThis.RABBIT_PULL_MS || CONFIG.PULL_EVERY_MS); pullNow(); }
 }
 
 export function startSync() {

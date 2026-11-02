@@ -228,3 +228,15 @@ test('SG tab: own layout built from the old list; a retired number disappears; o
   assert.ok(!g.items.some(i => i.id === 'SG002'));
   assert.strictEqual(item(g, 'B1').kind, 'bike');
 });
+
+test('QwenWork findings: manager number read from the Note column; a departure of numbers all out opens no trip', () => {
+  const env = freshEnv();
+  env.book['Gear_Settings'].data.forEach(r => { if (r[0] === 'Manager WhatsApp') { r[1] = ''; r[2] = '+62881011166142'; } });
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  assert.strictEqual(gearOf(env, made).managerWa, '+62881011166142');
+  rent(env, ayu, 'Ann', ['SG001'], 1);
+  assert.strictEqual(push(env, made, op('sunset_out', { trip: id('T'), items: ['SG001'] })).results[0].status, 'applied');
+  const g = gearOf(env, ayu);
+  assert.deepStrictEqual(g.trips, []);
+  assert.ok(g.diffs.some(d => d.item === 'SG001' && d.kind === 'counted_but_out'));
+});

@@ -33,7 +33,8 @@ export async function renderGear(root, d) {
   const out = g.items.filter(i => i.where === 'out' || i.where === 'sunset').sort((a, b) => (a.back || '') < (b.back || '') ? -1 : 1);
   const extPrice = it => (it.kind === 'mask' ? g.ext.mask : g.ext.bike);
   const damagePrice = dm => { const it = byId.get(dm.item); return it && it.kind === 'bike' ? g.prices.Bike : g.prices[dm.condition]; };
-  const sunsetOut = g.trips.reduce((s, t) => s + t.items.length, 0);
+  const sunsetOut = g.items.filter(i => i.where === 'sunset').length; // on the boat now
+  const sunsetDay = g.trips.reduce((s, t) => s + t.items.length, 0);
   const chips = (list, key) => list.map(id => `<span class="chip">${esc(id)}<button type="button" data-${key}rm="${esc(id)}" aria-label="Remove ${esc(id)}">×</button></span>`).join('');
   const numBox = (key, list, ph) => `<div class="gearpick"><div class="gearbox">${chips(list, key)}<input data-${key}in autocomplete="off" placeholder="${ph}" aria-label="${ph}"></div>
     <ul class="suggest gsug" data-${key}sug role="listbox" hidden></ul></div>`;
@@ -102,8 +103,8 @@ export async function renderGear(root, d) {
                 <div class="small ${late ? 'warnline' : 'muted'}">${i.where === 'sunset' ? 'Sunset Boat · back 21:30' : late ? `Late since ${esc(fmtWhen(i.back))}` : `Back before ${esc(fmtWhen(i.back))}`}</div></div>
               ${late && i.last && i.last.kind === 'rental' ? `<a class="ghost small walink" target="_blank" rel="noopener" href="${waText(`Hello ${i.last.guest}, this is The Rabbit Tree reception. Your ${i.kind === 'mask' ? 'snorkeling mask' : 'bike'} ${i.id} was due back ${fmtWhen(i.back)}. Could you bring it back to the reception? Thank you!`)}">WhatsApp guest</a>` : '<span></span>'}</li>`;
           }).join('')}</ul>` : '<p class="muted">Nothing out.</p>'}
-          ${g.trips.length ? `<div class="gsunset"><b>Sunset Boat today</b> · ${sunsetOut} mask${sunsetOut === 1 ? '' : 's'} out · ${g.sunsetSales} Sunset Boat guest${g.sunsetSales === 1 ? '' : 's'} in the sales
-            ${sunsetOut !== g.sunsetSales ? `<span class="warnline small"> — check: ${sunsetOut > g.sunsetSales ? 'more masks than guests recorded' : 'fewer masks than guests recorded'}</span>` : ''}</div>` : ''}
+          ${g.trips.length ? `<div class="gsunset"><b>Sunset Boat today</b> · ${sunsetOut} mask${sunsetOut === 1 ? '' : 's'} on the boat now · ${sunsetDay} taken today · ${g.sunsetSales} Sunset Boat guest${g.sunsetSales === 1 ? '' : 's'} in the sales
+            ${sunsetDay > g.sunsetSales ? `<span class="warnline small"> — check: more masks taken than guests recorded</span>` : ''}</div>` : ''}
         </section>
         ${g.damages.length ? `<section class="card gcard"><h2>Damage to decide</h2><ul class="gl">${g.damages.map(dmgRow).join('')}</ul>
           <p class="muted small">Prices come from the Gear_Settings sheet. Charging adds an Unpaid line to the guest’s bill.</p></section>` : ''}
