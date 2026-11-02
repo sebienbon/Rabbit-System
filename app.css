@@ -60,8 +60,10 @@ h2 { font-size: 1.45rem; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; color: #fff; background-image: var(--grad-hero); background-size: 200% 200%; animation: rt-shine 10s ease-in-out infinite alternate; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; }
 .brand b { font-family: var(--display); font-weight: 800; font-size: 1.2rem; }
-.brand span { font-weight: 700; }
-.badge-ears { width: 40px; height: 40px; border-radius: 13px; background: rgba(255,255,255,.2); display: grid; place-items: center; animation: rt-hop 2.6s ease-in-out infinite; }
+
+.brand .mark { width: 22px; height: 36px; object-fit: contain; animation: rt-hop 2.6s ease-in-out infinite; }
+.brand-text { display: flex; align-items: baseline; gap: 10px; }
+.brand .wordmark { height: 30px; width: auto; display: block; align-self: center; }
 .ears { width: 34px; height: 34px; }
 .who { display: flex; align-items: center; gap: 12px; }
 .who > span { font-weight: 700; }
@@ -168,7 +170,7 @@ dd[data-tone="less"] { background: var(--bad-bg); color: var(--bad); }
   .top, .sync { padding-left: 16px; padding-right: 16px; }
   .card { padding: 18px; }
   .primary { width: 100%; }
-  .brand span { display: none; }
+  .brand .wordmark { display: none; }
 }
 
 /* ---------- work area (shift open) ---------- */
@@ -506,3 +508,7 @@ ul.plain li .num { margin-left: auto; }
 
 /* the Unpaid sign */
 .pay[data-pay="Unpaid"]::before { width: 22px; height: 22px; -webkit-mask: none; mask: none; background: url(img/unpaid.webp) center / contain no-repeat; }
+
+/* The Rabbit Tree logo on the login screen */
+.login h1 { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.login h1::before { content: ''; width: 260px; height: 140px; background: url(img/logo-mark-ink.png) left top / auto 92px no-repeat, url(img/logo-name-ink.png) left bottom / auto 38px no-repeat; animation: none; }
