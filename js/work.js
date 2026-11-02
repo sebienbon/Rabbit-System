@@ -3,6 +3,8 @@ import { enqueue } from './sync.js';
 import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash, partnerView, billNet, tsFromMs, lastSettlementView, cardLines, cardAmount } from './ledger.js';
 import { money, parseMoney } from './shift.js';
 import { renderBar } from './bar.js'; // TEMPORARY (bar cash-out)
+import { gearView, backBefore, fmtWhen } from './gearcore.js';
+import { renderGear } from './gear.js';
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
 // Everything is written locally first (instant, works offline), then sent.
@@ -32,8 +34,8 @@ export const cartBusy = ui => !!(ui.cart && (ui.cart.items.length || ui.cart.gue
 
 /** Shared data for one render. */
 async function load(ctx) {
-  const [lines, catalog, payments, guestList] = await Promise.all([
-    ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests')]);
+  const [lines, catalog, payments, guestList, gear] = await Promise.all([
+    ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests'), gearView()]);
   const names = new Map();
   for (const g of guestList || []) names.set(norm(g), g);
   for (const l of lines) if (l.guest && l.type === 'Income' && l.object !== 'Cash Supply' && !names.has(norm(l.guest))) names.set(norm(l.guest), l.guest);
@@ -43,7 +45,7 @@ async function load(ctx) {
     u.total += l.total || 0; u.count++; if (l.ts < u.oldest) u.oldest = l.ts;
     unpaid.set(l.guest, u);
   }
-  return { lines, catalog: catalog || [], payments: payments || ['Cash', 'Unpaid'], guests: [...names.values()], unpaid, ...ctx };
+  return { lines, catalog: catalog || [], payments: payments || ['Cash', 'Unpaid'], guests: [...names.values()], unpaid, gear, ...ctx };
 }
 
 // ---------------------------------------------------------------- tabs
@@ -69,6 +71,7 @@ export async function renderWork(root, ctx) {
   else if (tab === 'partners') await renderPartners(root, d);
   else if (tab === 'card') await renderCard(root, d);
   else if (tab === 'bar') await renderBar(root, d); // TEMPORARY (bar cash-out)
+  else if (tab === 'gear') await renderGear(root, d);
 }
 
 // ---------------------------------------------------------------- sell
@@ -150,20 +153,32 @@ function renderSell(root, d) {
     boxEl.querySelector('#guestIn').focus();
   };
 
-  const lineSum = () => cart.items.reduce((s, it) => s + Math.round(it.qty * (it.unit || 0)), 0);
+  // Gear rental (mask, bike): the quantity is the number of days, one line per number picked.
+  const gearKind = name => d.gear && d.gear.product ? (name === d.gear.product.mask ? 'mask' : name === d.gear.product.bike ? 'bike' : null) : null;
+  const pieces = it => (it.gear ? Math.max(it.gear.length, 1) : 1);
+  const chosenNumbers = () => new Set(cart.items.flatMap(it => it.gear || []));
+  const available = kind => (d.gear ? d.gear.items : []).filter(i => i.kind === kind && i.where === 'in' && i.condition === 'OK' && !chosenNumbers().has(i.id));
+  const lineSum = () => cart.items.reduce((s, it) => s + Math.round(it.qty * (it.unit || 0)) * pieces(it), 0);
+  const gearBox = (it, i) => `<div class="gearpick">
+      <div class="gearbox">${it.gear.map(g => `<span class="chip">${esc(g)}<button type="button" data-gearrm="${i}:${esc(g)}" aria-label="Remove ${esc(g)}">×</button></span>`).join('')}
+        <input data-gearin="${i}" autocomplete="off" placeholder="${it.gear.length ? 'Add number' : 'Type or pick a number'}" aria-label="${esc(it.name)} numbers"></div>
+      <ul class="suggest gsug" data-gearsug="${i}" role="listbox" hidden></ul>
+      <small>Back before ${esc(fmtWhen(new Date(backBefore(Date.now(), it.qty)).toISOString()))}</small>
+    </div>`;
   const renderCart = () => {
     const g = Math.max(cart.guests.length, 1);
     const total = lineSum() * g;
     const payBtns = d.payments.map(p => `<button type="button" class="pay${cart.payment === p ? ' on' : ''}" data-pay="${esc(p)}" aria-pressed="${cart.payment === p}">${esc(payLabel(p))}</button>`).join('');
     cartEl.innerHTML = `<h2>Sale</h2>
       ${cart.items.length ? `<ul class="items">${cart.items.map((it, i) => `<li>
-          <div class="iname">${esc(it.name.replace(/^-/, ''))}<small>${esc(it.category)}</small></div>
-          <div class="qty" role="group" aria-label="Quantity">
+          <div class="iname">${esc(it.name.replace(/^-/, ''))}<small>${it.gear ? `${it.gear.length} × · days` : esc(it.category)}</small></div>
+          <div class="qty" role="group" aria-label="${it.gear ? 'Days' : 'Quantity'}">
             <button type="button" data-dec="${i}" aria-label="One less">−</button><span class="num">${it.qty}</span><button type="button" data-inc="${i}" aria-label="One more">+</button>
           </div>
           <label class="unit"><span class="sr">Price per unit</span><span class="cur">Rp</span><input inputmode="numeric" data-unit="${i}" value="${it.unit ? money(it.unit) : ''}" placeholder="price"></label>
-          <span class="ltot num" data-ltot="${i}">${money(it.qty * (it.unit || 0))}</span>
+          <span class="ltot num" data-ltot="${i}">${money(it.qty * (it.unit || 0) * pieces(it))}</span>
           <button type="button" class="rm" data-rm="${i}" aria-label="Remove ${esc(it.name)}">×</button>
+          ${it.gear ? gearBox(it, i) : ''}
         </li>`).join('')}</ul>` : `<p class="muted empty">Tap products to add them.</p>`}
       ${cart.guests.length > 1 ? `<p class="each">Each of the ${cart.guests.length} guests gets these items.</p>` : ''}
       <div class="ctotal"><span>Total</span><b class="num" id="cartTotal">Rp ${money(total)}</b></div>
@@ -177,7 +192,7 @@ function renderSell(root, d) {
     const total = lineSum() * Math.max(cart.guests.length, 1);
     cartEl.querySelector('#cartTotal').textContent = `Rp ${money(total)}`;
     const fee = cartEl.querySelector('#fee'); if (fee) fee.textContent = money(Math.round(total * 1.03));
-    cart.items.forEach((it, i) => { const el = cartEl.querySelector(`[data-ltot="${i}"]`); if (el) el.textContent = money(it.qty * (it.unit || 0)); });
+    cart.items.forEach((it, i) => { const el = cartEl.querySelector(`[data-ltot="${i}"]`); if (el) el.textContent = money(it.qty * (it.unit || 0) * pieces(it)); });
   };
 
   root.addEventListener('click', async e => {
@@ -188,19 +203,56 @@ function renderSell(root, d) {
     if (b.dataset.add !== undefined) {
       const p = d.catalog[+b.dataset.add];
       const ex = cart.items.find(x => x.name === p.name && x.category === p.category);
-      if (ex) ex.qty++; else cart.items.push({ name: p.name, category: p.category, qty: 1, unit: p.price || 0, unitCost: p.cost || 0 });
+      const kind = gearKind(p.name);
+      if (ex && kind) { cartEl.querySelector(`[data-gearin="${cart.items.indexOf(ex)}"]`)?.focus(); return; }
+      if (ex) ex.qty++; else cart.items.push({ name: p.name, category: p.category, qty: 1, unit: p.price || 0, unitCost: p.cost || 0, ...(kind ? { gear: [], kind } : {}) });
       renderCart(); renderProds();
-      if (!p.price) cartEl.querySelector(`[data-unit="${cart.items.length - 1}"]`)?.focus();
+      if (kind) cartEl.querySelector(`[data-gearin="${cart.items.length - 1}"]`)?.focus();
+      else if (!p.price) cartEl.querySelector(`[data-unit="${cart.items.length - 1}"]`)?.focus();
       return;
     }
     if (b.dataset.inc !== undefined) { cart.items[+b.dataset.inc].qty++; renderCart(); renderProds(); return; }
     if (b.dataset.dec !== undefined) { const it = cart.items[+b.dataset.dec]; if (it.qty > 1) it.qty--; renderCart(); renderProds(); return; }
     if (b.dataset.rm !== undefined) { cart.items.splice(+b.dataset.rm, 1); renderCart(); renderProds(); return; }
     if (b.dataset.pay !== undefined) { cart.payment = b.dataset.pay; renderCart(); return; }
+    if (b.dataset.gearpick !== undefined) { const [i, g] = b.dataset.gearpick.split(':'); addNumber(+i, g); return; }
+    if (b.dataset.gearrm !== undefined) { const [i, g] = b.dataset.gearrm.split(':'); const it = cart.items[+i]; it.gear = it.gear.filter(x => x !== g); renderCart(); return; }
     if (b.id === 'recordSale') return recordSale(b);
+  });
+  const showNumbers = (i, q) => {
+    const it = cart.items[i], ul = cartEl.querySelector(`[data-gearsug="${i}"]`);
+    if (!it || !ul) return;
+    const n = String(q || '').trim().toUpperCase();
+    const list = available(it.kind).filter(x => !n || x.id.includes(n)).slice(0, 8);
+    ul.innerHTML = list.length ? list.map(x => `<li><button type="button" data-gearpick="${i}:${esc(x.id)}">${esc(x.id)}</button></li>`).join('')
+      : `<li class="muted">${n ? 'No available number matches.' : 'No ' + it.kind + ' in stock.'}</li>`;
+    ul.hidden = false;
+  };
+  const addNumber = (i, g) => {
+    const it = cart.items[i];
+    const hit = available(it.kind).find(x => x.id === String(g || '').trim().toUpperCase());
+    const err = cartEl.querySelector('#saleErr');
+    if (!hit) { err.textContent = `${String(g).toUpperCase()} is not available (out, broken or unknown).`; return; }
+    it.gear.push(hit.id);
+    renderCart(); renderProds();
+    cartEl.querySelector(`[data-gearin="${i}"]`)?.focus();
+  };
+  root.addEventListener('focusin', e => { if (e.target.dataset && e.target.dataset.gearin !== undefined) showNumbers(+e.target.dataset.gearin, e.target.value); });
+  root.addEventListener('focusout', e => {
+    if (e.target.dataset && e.target.dataset.gearin !== undefined) setTimeout(() => { const ul = cartEl.querySelector(`[data-gearsug="${e.target.dataset.gearin}"]`); if (ul && !ul.contains(document.activeElement)) ul.hidden = true; }, 150);
+  });
+  root.addEventListener('keydown', e => {
+    const t = e.target;
+    if (t.dataset && t.dataset.gearin !== undefined && e.key === 'Enter') {
+      e.preventDefault();
+      const i = +t.dataset.gearin, typed = t.value.trim().toUpperCase();
+      const first = cartEl.querySelector(`[data-gearsug="${i}"] [data-gearpick]`);
+      addNumber(i, available(cart.items[i].kind).some(x => x.id === typed) ? typed : (first ? first.dataset.gearpick.split(':')[1] : typed));
+    }
   });
   root.addEventListener('input', e => {
     const t = e.target;
+    if (t.dataset && t.dataset.gearin !== undefined) { showNumbers(+t.dataset.gearin, t.value); return; }
     if (t.id === 'prodIn') { ui.prodQuery = t.value; renderProds(); }
     if (t.id === 'saleComment') cart.comment = t.value;
     if (t.dataset.unit !== undefined) {
@@ -218,11 +270,18 @@ function renderSell(root, d) {
     if (!cart.items.length) { say('Add at least one product.'); return; }
     const noPrice = cart.items.findIndex(it => !it.unit || it.unit > 1e9);
     if (noPrice >= 0) { say(`Enter a correct price for ${cart.items[noPrice].name.replace(/^-/, '')}.`); cartEl.querySelector(`[data-unit="${noPrice}"]`).focus(); return; }
+    const noNumbers = cart.items.find(it => it.gear && !it.gear.length);
+    if (noNumbers) { say(`Pick the ${noNumbers.kind} number${noNumbers.kind === 'mask' ? 's' : ''} for ${noNumbers.name}.`); cartEl.querySelector(`[data-gearin="${cart.items.indexOf(noNumbers)}"]`)?.focus(); return; }
+    if (cart.items.some(it => it.gear) && cart.guests.length > 1) { say('Rent masks and bikes for one guest at a time.'); return; }
     if (!cart.payment) { say('Choose how the guest pays.'); return; }
     btn.disabled = true;
     try {
       const lines = [];
       for (const it of cart.items) for (const g of cart.guests) {
+        if (it.gear) {
+          for (const num of it.gear) lines.push({ ts: await nextTs(), guest: g, category: it.category, object: it.name, qty: it.qty, unit: it.unit, unitCost: it.unitCost, gear: num, comment: [num, cart.comment.trim()].filter(Boolean).join(' · ') });
+          continue;
+        }
         lines.push({ ts: await nextTs(), guest: g, category: it.category, object: it.name, qty: it.qty, unit: it.unit, unitCost: it.unitCost, comment: cart.comment.trim() });
       }
       const total = lines.reduce((s, l) => s + Math.round(l.qty * l.unit), 0);

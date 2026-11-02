@@ -107,6 +107,10 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
           const x = s.match(/^(\d\d)\/(\d\d)\/(\d{4}) (\d\d):(\d\d):(\d\d)$/);
           if (!x) throw new Error('Unparseable date: ' + s);
           [d, m, y, H, M, S] = x.slice(1).map(Number);
+        } else if (pattern === 'yyyy-MM-dd HH:mm:ss') {
+          const x = s.match(/^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)$/);
+          if (!x) throw new Error('Unparseable date: ' + s);
+          [y, m, d, H, M, S] = x.slice(1).map(Number);
         } else throw new Error('shim parseDate pattern ' + pattern);
         const guess = new Date(Date.UTC(y, m - 1, d, H, M, S));
         const shown = fmt(guess, _tz, 'yyyy-MM-dd HH:mm:ss').split(/[- :]/).map(Number);

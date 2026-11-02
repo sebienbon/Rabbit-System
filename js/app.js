@@ -5,7 +5,9 @@ import { startSync, onStatus, pushNow, pullNow, dismissRejected } from './sync.j
 import { currentShift, cashInBoxBeforeOpening, expectedCash, cashMovements, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
 import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy, partnerBusy, cardBusy } from './work.js';
 import { barBusy } from './bar.js'; // TEMPORARY (bar cash-out)
-const cartBusy = ui => saleBusy(ui) || expenseBusy(ui) || cashBusy(ui) || partnerBusy(ui) || cardBusy(ui) || barBusy(ui);
+import { gearBusy, gearAlerts } from './gear.js';
+import { gearView, checkDue, notifyOnce } from './gearcore.js';
+const cartBusy = ui => saleBusy(ui) || expenseBusy(ui) || cashBusy(ui) || partnerBusy(ui) || cardBusy(ui) || barBusy(ui) || gearBusy(ui);
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -181,7 +183,9 @@ async function renderShift() {
   const expected = await expectedCash(shift);
   const { phantom } = await cashMovements(shift);
   const wt = await workTabs({ ui, user: ui.user, shift });
-  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['partners', 'Partners', wt.counts.partners], ['card', 'Card'], ['bar', 'Bar cash-out'], /* TEMPORARY (bar cash-out) */ ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
+  const gear = await gearView();
+  const ga = gearAlerts(gear);
+  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['partners', 'Partners', wt.counts.partners], ['card', 'Card'], ['bar', 'Bar cash-out'], /* TEMPORARY (bar cash-out) */ ['gear', 'Gear', ga.diffs + ga.late], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
   html += `<section class="card shift">
     <div class="shifthead">
       <h2>${mine ? 'Your shift' : `${esc(shift.userName && shift.userName !== shift.user ? shift.userName : nameOf(shift.user))}'s shift`}</h2>
@@ -195,6 +199,7 @@ async function renderShift() {
     </dl>
     <nav class="tabs" role="tablist">${tabs.map(([k, label, n]) => `<button type="button" role="tab" aria-selected="${ui.tab === k}" data-tab="${k}">${label}${n ? `<span class="count">${n}</span>` : ''}</button>`).join('')}</nav>
   </section>`;
+  html += gearBanner(gear, ga);
 
   if (ui.tab !== 'close') {
     // Built off-screen first, so the tab never shows empty while its data loads.
@@ -248,6 +253,7 @@ async function renderShift() {
 
   html += `<section class="card"><h2>Close the shift</h2>
     <form id="closeForm" novalidate>
+      ${gear && !gear.countedToday && new Date(Date.now() + 8 * 3600000).getUTCHours() >= 17 ? `<p class="phwarn">The gear evening check is not done today. Ask the gear staff to do it in their app before you leave.</p>` : ''}
       ${phantom ? `<p class="phwarn">Phantom cash of this shift is included: ${phantom < 0 ? '−' : '+'}${money(Math.abs(phantom))}. Count only the cash really in the box.</p>` : ''}
       ${moneyField('cash', 'Cash counted in the box')}
       ${moneyField('cashout', 'Cash taken out', 'Money you remove from the box and hand over. Leave empty if none.')}
@@ -309,6 +315,23 @@ function bindAttention() {
   main().querySelectorAll('[data-dismiss]').forEach(b => b.onclick = async () => { await dismissRejected(b.dataset.dismiss); render(); });
 }
 
+// ---------- gear reminders ----------
+function gearBanner(g, ga) {
+  if (!g) return '';
+  const due = checkDue(g);
+  if (due) notifyOnce('gearcheck', 'Gear evening check', 'The masks and bikes have not been checked today.');
+  if (ga.diffs) notifyOnce('geardiff:' + ga.diffs, 'Gear differences', `${ga.diffs} difference${ga.diffs > 1 ? 's' : ''} to solve with the gear staff.`);
+  if (!due && !ga.diffs) return '';
+  const ask = 'Notification' in window && Notification.permission === 'default'
+    ? ' <button type="button" class="ghost small" data-notifyon>Turn on reminders</button>' : '';
+  return `<div class="notice gearnote" role="status">${due ? 'Gear evening check not done yet today. ' : ''}${ga.diffs ? `${ga.diffs} gear difference${ga.diffs > 1 ? 's' : ''} to solve. ` : ''}<button type="button" class="ghost small" data-tab="gear">Open Gear</button>${ask}</div>`;
+}
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-notifyon]')) { try { Notification.requestPermission().then(() => render()); } catch { /* unsupported */ } }
+});
+// The reminder must appear around 20:00 even when nobody touches the screen.
+setInterval(() => { if (ui.user && !cartBusy(ui) && !ui.closing) afterSync(); }, 10 * 60000);
+
 // ---------- shell ----------
 let rendering = null, renderAgain = false;
 function render() {
@@ -320,6 +343,11 @@ function render() {
 }
 async function renderNow() {
   if (!ui.user) { await renderLogin(); return; }
+  if (ui.user.role === 'gear') {
+    await logout(ui.user); ui.user = null;
+    ui.notice = 'Gear staff accounts use the gear app (gear.html), not the reception.';
+    await renderLogin(); return;
+  }
   $('#who').innerHTML = `<span>${esc(ui.user.name)}${ui.user.role !== 'staff' ? ` <em>${esc(ui.user.role)}</em>` : ''}</span>
     <button class="ghost small" id="logout">Log out</button>`;
   $('#logout').onclick = async () => {

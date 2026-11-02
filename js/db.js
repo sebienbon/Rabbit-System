@@ -1,6 +1,6 @@
 // Tiny promise wrapper around IndexedDB. Everything the interface knows lives here,
 // so it keeps working during an Internet outage and survives a browser restart.
-const DB_NAME = 'rabbit-reception';
+const DB_NAME = globalThis.RABBIT_DB || 'rabbit-reception'; // the gear app uses its own database
 const DB_VERSION = 2;
 const STORES = ['kv', 'outbox', 'shifts', 'rejected', 'applied'];
 

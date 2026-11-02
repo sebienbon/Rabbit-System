@@ -19,7 +19,13 @@ function seedEnv() {
       ['-Horse Riding', '400,000Rp', '350,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Unpaid'],
       ['-Shuttle Bangsal / Kuta', '160,000Rp', '90,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Paid to Partner'],
       ['-Snorkeling Trip', '150,000Rp', '100,000Rp'],
+      ['Snorkeling Mask', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Snorkeling Mask', '', '-Sunset Boat'],
+      ['Rabbit bike', '50,000Rp', '', '', '', '', '', '', '', '', '', 'Rabbit bike'],
+      ['-Sunset Boat', '200,000Rp', '100,000Rp'],
     ],
+    'SG': [['Num', 'Status', 'Last guest ', 'Last Time ', 'Num Days', 'Back Before'],
+      ...Array.from({ length: 12 }, (_, i) => ['SG' + String(i + 1).padStart(3, '0'), 'OK', '', '', '', '']),
+      ['B1442', 'OK', '', '', '', ''], ['B1443', 'OK', '', '', '', '']],
     'Entries': [
       ['Date', 'Category', 'Sub-category', 'object', 'Qty', 'Auto price per unit', 'Auto price', 'Real price (if different)', 'Author', 'Theorical cost per unit', 'Theorical cost', 'Real cost (if different)', 'Guest', 'Payment Type', 'Time stamp', 'month correction', 'Comment'],
       [new Date(Date.now() - 3 * 86400000), 'Income', 'Service', 'Laundry', 2, 30000, 60000, 60000, 'r2@x', '', 0, 0, 'Alice Example', 'Unpaid',
@@ -43,6 +49,8 @@ function seedEnv() {
   u.appendRow(['ayu', 'Ayu', 'staff', 'r1@x', 'ayu123', '', '', '']);
   u.appendRow(['dewa', 'Dewa', 'staff', 'r2@x', 'dewa123', '', '', '']);
   u.appendRow(['boss', 'Sebastien', 'manager', 'boss@x', 'boss123', '', '', '']);
+  u.appendRow(['made', 'Made', 'gear', 'made@x', 'made123', '', '', '']);
+  env.book['Gear_Settings'].data.forEach(r => { if (r[0] === 'Snorkel') r[1] = 75000; if (r[0] === 'Manager WhatsApp') r[1] = '+62 812 0000 0000'; });
   return env;
 }
 

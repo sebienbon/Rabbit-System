@@ -333,3 +333,66 @@ ul.plain li .num { margin-left: auto; }
 @media (max-width: 600px) { .plines li { grid-template-columns: 24px minmax(0, 1fr) 100px; } .plines .when { display: none; } .plines .pcost { grid-column: 2 / -1; } }
 .phwarn { background: var(--warn-bg); color: var(--warn); border-radius: var(--radius-sm); padding: 10px 14px; font-weight: 700; margin: 0 0 14px; }
 .reqif { font-style: normal; font-weight: 400; color: var(--ink-soft); margin-left: 4px; }
+
+/* ---------- gear (masks & bikes) ---------- */
+.gearpick { grid-column: 1 / -1; margin-top: 6px; }
+.gearbox { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1.5px solid var(--line); border-radius: var(--radius-sm); padding: 5px 6px; background: #fff; }
+.gearbox:focus-within { border-color: var(--blue); }
+.gearbox input { flex: 1 1 120px; min-width: 0; border: 0; outline: 0; font: inherit; padding: 6px 4px; background: transparent; }
+.gsug { max-height: 260px; overflow: auto; }
+.gearpage { display: grid; gap: 16px; }
+.ggrid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.ggrid .col { display: grid; gap: 16px; }
+.gcard h2 { font-size: 1.15rem; }
+.gcard.bad { border: 2px solid var(--bad); }
+.gl { list-style: none; margin: 0; padding: 0; }
+.gl > li { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.gl > li:first-child { border-top: 0; }
+.gnum { font-family: var(--display); font-variant-numeric: tabular-nums; }
+.gacts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.gacts input { font: inherit; padding: 5px 8px; border: 1.5px solid var(--line); border-radius: 6px; }
+.gdiff .gacts { grid-column: 2 / -1; justify-content: flex-start; }
+.gout.late { background: var(--warn-bg); margin: 0 -10px; padding-left: 10px; padding-right: 10px; border-radius: 6px; }
+.warnline { color: var(--warn); font-weight: 700; }
+.walink { text-decoration: none; border-radius: var(--radius-sm); color: var(--ok); border-color: var(--ok); }
+.gret { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.gret .check { grid-column: 1 / -1; margin: 0; }
+.gret select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1.5px solid var(--line); }
+.gsunset { margin-top: 12px; padding: 10px 12px; background: var(--bg); border-radius: var(--radius-sm); }
+.gcard .primary.wide, .gcard .ghost.wide { width: 100%; margin-top: 10px; }
+.gearnote { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--warn-bg); color: var(--warn); margin-top: 12px; }
+@media (max-width: 900px) { .ggrid { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .gl > li { grid-template-columns: 52px minmax(0, 1fr); } .gl > li > :last-child { grid-column: 1 / -1; justify-content: flex-start; } }
+
+/* ---------- gear staff app (phone) ---------- */
+.ga main { max-width: 560px; }
+.ga h1 { font-size: 1.6rem; }
+.ga h2 { font-size: 1.05rem; margin: 16px 0 8px; font-family: var(--sans); }
+.ga .center { text-align: center; }
+.gahome, .gabody { display: grid; gap: 12px; }
+.gabar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.gabar b { font-family: var(--display); color: var(--blue); font-size: 1.15rem; }
+.gatile { display: grid; gap: 2px; text-align: left; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 16px 18px; color: inherit; }
+.gatile b { font-family: var(--display); font-size: 1.2rem; }
+.gatile small { color: var(--ink-soft); }
+.gatile em { color: var(--warn); font-style: normal; font-weight: 700; }
+.gatile.due { border: 2px solid var(--warn); }
+.gatile.bad { border: 2px solid var(--bad); }
+.gagrid { display: grid; gap: 6px; }
+.gagrid.six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.gagrid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.gacell { height: 48px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink); font-weight: 700; font-size: .9rem; padding: 0 2px; }
+.gacell.on { border: 2px solid var(--ok); background: var(--ok-bg); color: var(--ok); }
+.gacell.warn { border: 2px solid var(--warn); background: var(--warn-bg); color: var(--warn); }
+.gapanel { padding: 14px; display: grid; gap: 10px; }
+.gaconds { display: flex; flex-wrap: wrap; gap: 6px; }
+.gaconds button { border: 1.5px solid var(--line); background: #fff; padding: 9px 12px; font-weight: 700; }
+.gaconds button.on { background: var(--warn); border-color: var(--warn); color: #fff; }
+.gaconds button.on:first-child { background: var(--ok); border-color: var(--ok); }
+.gawa { display: block; text-align: center; text-decoration: none; color: var(--ok); border-color: var(--ok); border-radius: var(--radius-sm); }
+.gadiff { padding: 14px; display: grid; gap: 6px; border: 2px solid var(--bad); }
+.gadiff b { color: var(--bad); }
+.gadiff.done { border: 1px solid var(--line); }
+.gadiff.done b { color: var(--ink); }
+.garow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.garow button { padding: 12px 8px; min-width: 0; }
