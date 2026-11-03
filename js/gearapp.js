@@ -14,7 +14,7 @@ const hhmm = iso => (fmtWhen(iso).split(' ').pop() || '');
 const DAYS = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const dayText = (iso = new Date().toISOString()) => { const d = new Date(Date.parse(iso) + 8 * 3600000); return `${DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; };
-const COND = { OK: 'Baik', 'Snorkel missing': 'Snorkel hilang', 'Ring missing': 'Ring hilang', Broken: 'Rusak' };
+const COND = { OK: 'Baik', 'Snorkel missing': 'Snorkel hilang', 'Ring missing': 'Ring hilang', 'Part missing': 'Ada bagian hilang', Broken: 'Rusak' };
 const DIFF = {
   counted_but_out: 'ada di kotak, tapi tercatat keluar',
   returned_not_in_box: 'tercatat kembali, tapi tidak ada',
@@ -82,22 +82,24 @@ const grid = (items, cls, on, extra = () => '') => `<div class="gagrid ${cls}">$
 }).join('')}</div>`;
 
 // Touch = here and OK; touch again = choose its condition (with the photo to the manager).
-const CONDS = kind => (kind === 'bike' ? ['OK', 'Broken'] : ['OK', 'Snorkel missing', 'Ring missing', 'Broken']);
+const CONDS = kind => (kind === 'bike' ? ['OK', 'Part missing', 'Broken'] : ['OK', 'Snorkel missing', 'Ring missing', 'Broken']);
 const touchState = c => it => c.items[it.id] === undefined ? '' : c.items[it.id] === 'OK' ? 'on' : 'warn';
-const touchMark = c => it => (c.items[it.id] && c.items[it.id] !== 'OK' ? (it.kind === 'bike' ? ' · Rusak' : ' !') : '');
+const touchMark = c => it => (c.items[it.id] && c.items[it.id] !== 'OK' && it.kind === 'bike' ? ' · ' + COND[c.items[it.id]] : ''); // masks: the orange cell says it
 function touchPanel(g, c, what, outLabel) {
   const sel = c.sel && g.items.find(i => i.id === c.sel);
   if (!sel) return '';
   return `<div class="card gapanel"><b>${esc(sel.id)} — kondisi</b>
     <div class="gaconds">${CONDS(sel.kind).map(k => `<button type="button" class="${c.items[sel.id] === k ? 'on' : ''}" data-cond="${k}">${COND[k]}</button>`).join('')}</div>
-    ${c.items[sel.id] && c.items[sel.id] !== 'OK' && g.managerWa ? `<a class="ghost wide gawa" target="_blank" rel="noopener" href="${waLink(g.managerWa, `${what} ${dayText()}: ${sel.id} — ${COND[c.items[sel.id]]}. Foto terlampir.`)}">Kirim foto ke manajer (WhatsApp)</a>` : ''}
+    ${c.items[sel.id] && c.items[sel.id] !== 'OK' ? `<label class="field ganote"><span>Komentar <em>opsional</em></span><textarea data-note="${esc(sel.id)}" rows="2" maxlength="300" placeholder="Apa yang rusak atau hilang?">${esc((c.notes || {})[sel.id] || '')}</textarea></label>
+      ${g.managerWa ? `<button type="button" class="ghost wide gawa" data-wa="${esc(sel.id)}" data-what="${esc(what)}">Kirim foto ke manajer (WhatsApp)</button>` : ''}` : ''}
     <button type="button" class="ghost small" data-uncount>${esc(outLabel)}</button></div>`;
 }
 function touchGrids(g, c, list, what, outLabel) {
   const masks = list.filter(i => i.kind === 'mask'), bikes = list.filter(i => i.kind === 'bike');
   const sel = c.sel && g.items.find(i => i.id === c.sel);
   const n = l => l.filter(i => c.items[i.id] !== undefined).length;
-  return `${masks.length ? `<h2>Masker <span class="muted">· ${n(masks)} disentuh</span></h2>${grid(masks, 'six', touchState(c), touchMark(c))}` : ''}
+  return `<p class="gahint">Rusak atau ada yang hilang? <b>Sentuh lagi nomornya</b> untuk memilih kondisi, menulis komentar dan mengirim foto ke manajer.</p>
+    ${masks.length ? `<h2>Masker <span class="muted">· ${n(masks)} disentuh</span></h2>${grid(masks, 'six', touchState(c), touchMark(c))}` : ''}
     ${sel && sel.kind === 'mask' ? touchPanel(g, c, what, outLabel) : ''}
     ${bikes.length ? `<h2>Sepeda <span class="muted">· ${n(bikes)} disentuh</span></h2>${grid(bikes, 'three', touchState(c), touchMark(c))}` : ''}
     ${sel && sel.kind === 'bike' ? touchPanel(g, c, what, outLabel) : ''}`;
@@ -244,6 +246,12 @@ document.addEventListener('click', async e => {
     } else if (ui.sel.has(id)) ui.sel.delete(id); else ui.sel.add(id);
     render(); return;
   }
+  if (ds.wa) {
+    const c = ui.count || { items: {}, notes: {} };
+    const note = (c.notes || {})[ds.wa];
+    window.open(waLink(g.managerWa, `${ds.what} ${dayText()}: ${ds.wa} — ${COND[c.items[ds.wa]] || ''}.${note ? ' ' + note + '.' : ''} Foto terlampir.`), '_blank', 'noopener');
+    return;
+  }
   if (ds.cond) { ui.count.items[ui.count.sel] = ds.cond; render(); return; }
   if (ds.uncount !== undefined) { delete ui.count.items[ui.count.sel]; ui.count.sel = null; render(); return; }
   if (ds.recount !== undefined) { ui.count = { items: {}, sel: null }; render(); return; }
@@ -269,14 +277,15 @@ document.addEventListener('click', async e => {
     b.disabled = true;
     const items = open.items.filter(id => c.items[id] !== undefined);
     const conditions = Object.fromEntries(items.filter(id => c.items[id] !== 'OK').map(id => [id, c.items[id]]));
-    await enqueue('sunset_back', { trip: open.trip, items, conditions });
+    const notes = Object.fromEntries(Object.keys(conditions).filter(id => (c.notes || {})[id]).map(id => [id, c.notes[id]]));
+    await enqueue('sunset_back', { trip: open.trip, items, conditions, notes });
     const broken = Object.keys(conditions).length;
     ui.notice = (missing.length ? `Disimpan. ${missing.length} belum kembali → selisih untuk resepsionis.` : 'Semua masker kembali.') + (broken ? ` ${broken} rusak → resepsionis memutuskan.` : '');
     ui.count = null; ui.sure = false; ui.screen = 'home'; render(); return;
   }
   if (ds.save === 'ret') {
     b.disabled = true;
-    const items = Object.entries(ui.count.items).map(([item, condition]) => ({ item, condition }));
+    const items = Object.entries(ui.count.items).map(([item, condition]) => ({ item, condition, note: (ui.count.notes || {})[item] || '' }));
     await enqueue('gear_return', { gid: newId('G'), items });
     ui.notice = `Pengembalian disimpan: ${items.map(x => x.item).join(', ')}.`;
     ui.count = null; ui.screen = 'home'; render(); return;
@@ -284,11 +293,17 @@ document.addEventListener('click', async e => {
   if (ds.save === 'count') {
     if (!ui.sure) { ui.sure = true; render(); return; }
     b.disabled = true;
-    const items = Object.entries(ui.count.items).map(([item, condition]) => ({ item, condition }));
+    const items = Object.entries(ui.count.items).map(([item, condition]) => ({ item, condition, note: (ui.count.notes || {})[item] || '' }));
     await enqueue('gear_count', { cid: newId('K'), items });
     ui.count = null; ui.sure = false;
     ui.notice = 'Cek terkirim. Hasilnya muncul di sini setelah sampai di sheet.'; render(); return;
   }
+});
+
+// A comment is kept as it is typed (no redraw, the keyboard stays open).
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset && t.dataset.note !== undefined && ui.count) (ui.count.notes = ui.count.notes || {})[t.dataset.note] = t.value;
 });
 
 async function boot() {

@@ -18,6 +18,8 @@ const DIFF_TEXT = {
 };
 const waText = t => `https://wa.me/?text=${encodeURIComponent(t)}`;
 
+const lateText = ms => { const h = Math.max(1, Math.round(ms / 3600000)); const d = Math.floor(h / 24), r = h % 24; return d ? `${d} day${d > 1 ? 's' : ''}${r ? ` ${r} h` : ''}` : `${h} h`; };
+
 export function gearAlerts(g) {
   if (!g) return { diffs: 0, late: 0 };
   return { diffs: g.diffs.length, late: g.items.filter(i => i.where === 'out' && daysLate(i.back)).length };
@@ -48,9 +50,12 @@ export async function renderGear(root, d) {
     else if (!allowed) acts = '';
     else if (df.kind === 'returned_late') {
       const unit = extPrice(it), days = df.late || 1;
-      acts = unit ? `<button type="button" class="primary small" data-dflate="${esc(df.id)}">Charge ${days} day${days > 1 ? 's' : ''} extension · ${money(days * unit)}</button>
-        <button type="button" class="ghost small" data-dfwaive="${esc(df.id)}">Waive it</button>`
-        : `<span class="small warnline">No extension price in Gear_Settings</span> <button type="button" class="ghost small" data-dfwaive="${esc(df.id)}">Close</button>`;
+      // Waive first: the gear staff often record it hours after the guest handed it back.
+      const span = df.due && df.returned ? lateText(Date.parse(df.returned) - Date.parse(df.due)) : `${days} day${days > 1 ? 's' : ''}`;
+      acts = `<span class="small">Due ${esc(fmtWhen(df.due))} · recorded ${esc(fmtWhen(df.returned))} · <b>${esc(span)} late</b></span>
+        <button type="button" class="primary small" data-dfwaive="${esc(df.id)}">Waive it</button>
+        ${unit ? `<button type="button" class="ghost small" data-dflate="${esc(df.id)}">Charge ${days} day${days > 1 ? 's' : ''} extension · ${money(days * unit)}</button>` : '<span class="small warnline">No extension price in Gear_Settings</span>'}`
+      ;
     } else if (df.kind === 'rented_while_out') {
       acts = `<button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked · it is with the guest</button>`;
     } else if (df.kind === 'counted_but_out') {
@@ -75,7 +80,7 @@ export async function renderGear(root, d) {
     const price = damagePrice(dm);
     const f = (ui.dmg = ui.dmg || {})[dm.id] = (ui.dmg[dm.id] || { amount: price || null, guest: dm.guest });
     return `<li class="gdiff"><b class="gnum">${esc(dm.item)}</b>
-      <div><b>${esc(dm.condition)}</b> <span class="muted small">· ${dm.decision === 'pending' ? 'to decide' : dm.decision === 'charge' ? 'charged' : 'not charged'}</span>${dm.pending ? ' <span class="badge wait">Waiting</span>' : ''}
+      <div><b>${esc(dm.condition)}</b>${dm.note ? ` <span class="small">“${esc(dm.note)}”</span>` : ''} <span class="muted small">· ${dm.decision === 'pending' ? 'to decide' : dm.decision === 'charge' ? 'charged' : 'not charged'}</span>${dm.pending ? ' <span class="badge wait">Waiting</span>' : ''}
         <div class="muted small">Last use: ${esc(lastUseText(it.last))}</div></div>
       <div class="gacts">${dm.pending ? '<span class="muted small">Decide once it reached the sheet.</span>' : dm.decision === 'pending' && allowed ? `
         <label class="small">Guest <input data-dmgguest="${esc(dm.id)}" value="${esc(f.guest || '')}" size="12"></label>
@@ -89,7 +94,7 @@ export async function renderGear(root, d) {
   const retRows = gr.items.map(id => {
     const it = byId.get(id); if (!it) return '';
     const late = it.last && it.last.kind === 'rental' ? daysLate(it.back) : 0;
-    const conds = it.kind === 'bike' ? ['OK', 'Broken', 'Lost'] : ['OK', 'Snorkel missing', 'Ring missing', 'Broken', 'Lost'];
+    const conds = it.kind === 'bike' ? ['OK', 'Part missing', 'Broken', 'Lost'] : ['OK', 'Snorkel missing', 'Ring missing', 'Broken', 'Lost'];
     return `<div class="gret"><b>${esc(id)}</b><span class="muted small">${esc(it.last ? it.last.guest : '')}</span>
       <select data-retcond="${esc(id)}" aria-label="Condition of ${esc(id)}">${conds.map(c => `<option${(gr.cond[id] || 'OK') === c ? ' selected' : ''}>${c}</option>`).join('')}</select>
       ${late ? (extPrice(it) ? `<label class="check small warnline"><input type="checkbox" data-retext="${esc(id)}"${gr.noExt[id] ? '' : ' checked'}> late ${late} day${late > 1 ? 's' : ''}: extension ${money(late * extPrice(it))} (Unpaid)</label>`

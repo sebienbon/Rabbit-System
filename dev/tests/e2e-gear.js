@@ -93,7 +93,7 @@ const step = m => console.log('  ✓ ' + m);
     for (const id of cells) if (!['SG003', 'SG005'].includes(id)) await phone.click(`[data-cell="${id}"]`);
     await phone.click('[data-cell="SG006"]'); // second touch: condition
     await phone.click('[data-cond="Snorkel missing"]');
-    await phone.waitForSelector('a.gawa[href*="wa.me/6281200000000"]');
+    await phone.waitForSelector('button.gawa[data-wa="SG006"]'); await phone.fill('[data-note="SG006"]', 'tali putus');
     await phone.screenshot({ path: `${shots}/g03-count.png`, fullPage: true });
     await phone.click('[data-save="count"]'); await phone.click('[data-save="count"]');
     await until(() => log().some(r => r[2] === 'count'), 'count logged');

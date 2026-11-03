@@ -329,3 +329,16 @@ test('Seb 03/11: gear staff record returns (blind, late ones to the reception) a
   assert.ok(g.damages.some(d => d.item === 'SG005' && d.condition === 'Broken' && d.guest === 'Sunset Boat'));
   assert.strictEqual(item(g, 'SG005').condition, 'Broken');
 });
+
+test('Seb 03/11: a damage carries the comment typed by the gear staff; bikes can miss a part; late return shows its times', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  rent(env, ayu, 'Ann', ['B1'], 1);
+  env.book['Gear_Log'].data.forEach(r => { if (r[2] === 'out' && r[3] === 'B1') r[5] = new Date(Date.now() - 5 * 3600000); });
+  push(env, made, op('gear_return', { gid: id('G'), items: [{ item: 'B1', condition: 'Part missing', note: 'pedale gauche' }] }));
+  const g = gearOf(env, ayu);
+  const dm = g.damages.find(d => d.item === 'B1');
+  assert.ok(dm && dm.condition === 'Part missing' && dm.note === 'pedale gauche');
+  const late = g.diffs.find(d => d.kind === 'returned_late');
+  assert.ok(late.due && late.returned && Date.parse(late.returned) - Date.parse(late.due) > 4 * 3600000);
+});

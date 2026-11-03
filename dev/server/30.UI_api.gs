@@ -765,7 +765,8 @@ var UIAPI = (function () {
     ['Ring', '', ''], ['Full snorkeling set (lost)', '', ''], ['Bike — repair', '', 'reception types the amount if empty'],
     ['Extension per day — mask', 30000, ''], ['Extension per day — bike', '', ''], ['Mask rental product', 'Snorkeling Mask', 'name in Data activities'],
     ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', 'number in column B, e.g. +62 812…']];
-  var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Broken', 'Lost'];
+  var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Part missing', 'Broken', 'Lost'];
+  var gnote_ = function (v) { return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 300); }; // comment on a damage
   var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1, gear_return: 1 }; // what the gear role may send
   /**
    * SG tab, our own layout: A number, B type (Mask / Bike), C in use (untick to retire a number)
@@ -910,7 +911,7 @@ var UIAPI = (function () {
       } else if (e.type === 'count') {
         counts.push({ id: e.id, at: e.at.toISOString(), by: e.by, n: (e.d.items || []).length });
       } else if (e.type === 'diff') {
-        diffs[e.id] = { id: e.id, item: e.item, kind: e.d.kind, at: e.at.toISOString(), count: e.ref, last: e.d.last || null, late: e.d.late || 0,
+        diffs[e.id] = { id: e.id, item: e.item, kind: e.d.kind, at: e.at.toISOString(), count: e.ref, last: e.d.last || null, late: e.d.late || 0, due: e.d.due || null, returned: e.d.returned || null,
           reception: false, gear: false, closed: false, note: '' };
       } else if (e.type === 'confirm') {
         var df = diffs[e.ref];
@@ -919,7 +920,7 @@ var UIAPI = (function () {
         var dl = diffs[e.ref]; if (dl) dl.closed = true;
         if (it) { it.where = 'lost'; it.condition = 'Lost'; }
       } else if (e.type === 'damage') {
-        damages[e.id] = { id: e.id, item: e.item, condition: e.d.condition, at: e.at.toISOString(), guest: e.ref, from: e.d.from || 'return',
+        damages[e.id] = { id: e.id, item: e.item, condition: e.d.condition, note: e.d.note || '', at: e.at.toISOString(), guest: e.ref, from: e.d.from || 'return',
           decision: 'pending', amount: null };
         if (it && e.d.condition !== 'OK') it.condition = e.d.condition;
       } else if (e.type === 'decide') {
@@ -1022,11 +1023,11 @@ var UIAPI = (function () {
         var late = it.where === 'out' && it.last && it.last.kind === 'rental' && it.back && at.getTime() > Date.parse(it.back)
           ? Math.ceil((at.getTime() - Date.parse(it.back)) / 86400000) : 0;
         if (late) {
-          rows.push({ at: at, id: id + '-late', type: 'diff', item: it.id, ref: gid, by: me.username, d: { kind: 'returned_late', last: it.last, late: late } });
+          rows.push({ at: at, id: id + '-late', type: 'diff', item: it.id, ref: gid, by: me.username, d: { kind: 'returned_late', last: it.last, late: late, due: it.back, returned: at.toISOString() } });
           rows.push({ at: at, id: id + '-late-g', type: 'confirm', item: it.id, ref: id + '-late', by: me.username, d: { side: 'gear', action: 'returned' } });
         }
       }
-      if (cond !== 'OK' && cond !== it.condition) rows.push({ at: at, id: 'D' + id, type: 'damage', item: it.id, ref: guest, by: me.username, d: { condition: cond, from: 'gear return' } });
+      if (cond !== 'OK' && cond !== it.condition) rows.push({ at: at, id: 'D' + id, type: 'damage', item: it.id, ref: guest, by: me.username, d: { condition: cond, from: 'gear return', note: gnote_(x.note) } });
     });
     gearLog_(rows);
     sgUpdate_();
@@ -1610,7 +1611,7 @@ var UIAPI = (function () {
         if (it.where !== 'out' && it.where !== 'sunset') throw apiError_('gear_not_out', it.id + ' is not recorded as out');
         var guest = it.last ? it.last.guest : '';
         rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond } });
-        if (cond !== 'OK') rows.push({ at: at, id: 'D' + id, type: 'damage', item: it.id, ref: guest, by: me.username, d: { condition: cond, from: 'return' } });
+        if (cond !== 'OK') rows.push({ at: at, id: 'D' + id, type: 'damage', item: it.id, ref: guest, by: me.username, d: { condition: cond, from: 'return', note: gnote_(x.note) } });
         if (x.ext && it.last && it.last.kind === 'rental') {
           var unit = it.kind === 'mask' ? set.ext.mask : set.ext.bike;
           if (unit) charges.push({ ts: x.ext.ts, object: it.kind === 'mask' ? set.product.mask : set.product.bike, qty: Math.max(1, Math.round(Number(x.ext.days) || 1)), unit: unit,
@@ -1666,7 +1667,7 @@ var UIAPI = (function () {
       var cond = p.conditions && typeof p.conditions === 'object' ? p.conditions : {};
       back.forEach(function (id) {
         var c = GEAR_CONDITIONS.indexOf(cond[id]) >= 0 ? cond[id] : 'OK';
-        if (c !== 'OK') rows.push({ at: at, id: 'D' + trip + '-' + id, type: 'damage', item: id, ref: 'Sunset Boat', by: me.username, d: { condition: c, from: 'sunset' } });
+        if (c !== 'OK') rows.push({ at: at, id: 'D' + trip + '-' + id, type: 'damage', item: id, ref: 'Sunset Boat', by: me.username, d: { condition: c, from: 'sunset', note: gnote_((p.notes || {})[id]) } });
       });
       gearLog_(rows);
       back.forEach(function (id) { sgUpdate_(id, { status: 'OK' }); });
@@ -1678,10 +1679,11 @@ var UIAPI = (function () {
       var at = parseAt_(op.at);
       var cid = String(p.cid || ''); if (!/^K[\w-]{6,40}$/.test(cid)) throw apiError_('bad_payload', 'Invalid id');
       if (gearEventDone_(cid)) return { already: true };
-      var st = gearState_(), seen = {};
+      var st = gearState_(), seen = {}, notes = {};
       (Array.isArray(p.items) ? p.items : []).forEach(function (x) {
         var it = gearItem_(st, x.item);
         seen[it.id] = GEAR_CONDITIONS.indexOf(x.condition) >= 0 ? x.condition : 'OK';
+        notes[it.id] = gnote_(x.note);
       });
       var open = {};
       st.diffs.forEach(function (d) { open[d.item + '|' + d.kind] = true; });
@@ -1694,7 +1696,7 @@ var UIAPI = (function () {
         var c = seen[it.id];
         if (c !== undefined) {
           if (it.where === 'out' || it.where === 'sunset') diff(it, 'counted_but_out');
-          if (c !== 'OK' && c !== it.condition) rows.push({ at: at, id: 'D' + cid + '-' + it.id, type: 'damage', item: it.id, ref: it.last ? it.last.guest : '', by: me.username, d: { condition: c, from: 'check' } });
+          if (c !== 'OK' && c !== it.condition) rows.push({ at: at, id: 'D' + cid + '-' + it.id, type: 'damage', item: it.id, ref: it.last ? it.last.guest : '', by: me.username, d: { condition: c, from: 'check', note: notes[it.id] || '' } });
         } else if (it.where === 'in' && it.condition === 'OK') { // a broken one may be away for repair
           diff(it, it.last && it.last.returned ? 'returned_not_in_box' : 'missing');
         }
