@@ -4,5 +4,5 @@
 export const CONFIG = {
   API_URL: 'https://script.google.com/macros/s/AKfycbxjw8ldfWzInmkTP2K1c-OnyfkmA_zW2ekoEEBos1GTcxmMhgCBCUckXTt4oV1mconK/exec',
   PUSH_EVERY_MS: 15000,      // send waiting operations
-  PULL_EVERY_MS: 5 * 60000,  // refresh catalog, guests, users
+  PULL_EVERY_MS: 2 * 60000,  // refresh catalog, guests, users, gear (the gear staff's work shows within 2 min)
 };

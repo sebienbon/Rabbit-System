@@ -90,12 +90,14 @@ export function applyGearOps(snap, ops, side = 'reception') {
       g.countedToday = true; g.lastCount = { at: op.at, by: op.by, pending: !!pending, n: (p.items || []).length };
     } else if (op.type === 'gear_service') {
       const it = items.get(p.item); if (it) { it.condition = 'OK'; if (it.where === 'lost') it.where = 'in'; mark(it); }
-      for (const [k, dm] of damages) if (dm.item === p.item && dm.decision !== 'pending') damages.delete(k);
+      for (const [k, dm] of damages) if (dm.item === p.item) { if (dm.decision !== 'pending') damages.delete(k); else dm.serviced = true; }
     }
   }
   g.items = [...items.values()];
   g.diffs = [...diffs.values()];
-  g.damages = [...damages.values()].filter(d => d.decision === 'pending' || (items.get(d.item) || {}).condition !== 'OK');
+  g.damages = [...damages.values()].filter(d => d.decision === 'pending' || (!d.serviced && (items.get(d.item) || {}).condition !== 'OK'));
+  // A trip whose masks all came back another way (desk return, found) is over.
+  for (const t of g.trips || []) if (!t.closed && side === 'reception' && !t.items.some(id => (items.get(id) || {}).where === 'sunset')) { t.closed = true; t.back = [...t.items]; }
   return g;
 }
 export async function gearView(side = 'reception') {

@@ -277,3 +277,26 @@ test('Seb 03/11: quantity = days on a rental line; correcting it moves the retur
   assert.strictEqual(item(g, 'SG001').where, 'out');
   assert.strictEqual(env.book['SG'].data[2][3], 'In');
 });
+
+test('QwenWork v11 K1/K2: a repaired damage does not come back; a trip returned at the desk is over', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  rent(env, ayu, 'Ann', ['SG001'], 1);
+  push(env, ayu, op('gear_return', { gid: id('G'), items: [{ item: 'SG001', condition: 'Broken' }] }));
+  let dm = gearOf(env, ayu).damages[0];
+  push(env, ayu, op('gear_decide', { did: id('E'), damage: dm.id, decision: 'nocharge' }));
+  push(env, ayu, op('gear_service', { sid: id('R'), item: 'SG001' }));
+  assert.deepStrictEqual(gearOf(env, ayu).damages, []);
+  // broken again at the evening check: only the new case shows
+  const all = gearOf(env, made).items.map(i => i.id);
+  push(env, made, op('gear_count', { cid: id('K'), items: all.map(x => ({ item: x, condition: x === 'SG001' ? 'Broken' : 'OK' })) }));
+  const ds = gearOf(env, ayu).damages;
+  assert.strictEqual(ds.length, 1);
+  assert.strictEqual(ds[0].decision, 'pending');
+  // K2
+  const trip = id('T');
+  push(env, made, op('sunset_out', { trip, items: ['SG002'] }));
+  push(env, ayu, op('gear_return', { gid: id('G'), items: [{ item: 'SG002', condition: 'OK' }] }));
+  const t = gearOf(env, made).trips.find(x => x.trip === trip);
+  assert.ok(t.closed, 'trip over');
+});

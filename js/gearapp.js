@@ -170,6 +170,7 @@ function diffs(g) {
       return `<div class="card gadiff${d.gear ? ' done' : ''}">
         <b>${esc(d.item)} — ${esc(DIFF[d.kind] || d.kind)}</b>
         <span class="muted small">${d.last ? 'Terakhir dipakai: ' : ''}${esc(lastUse(d.last))}</span>
+        ${d.reception && !d.gear ? '<span class="small warnline">Resepsionis sudah konfirmasi — tinggal Anda.</span>' : ''}
         ${d.gear ? `<span class="small">Anda sudah konfirmasi${d.pending ? ' (menunggu dikirim)' : ''} · menunggu resepsionis.</span>`
           : later ? `<span class="small">Belum selesai · tetap terbuka. <button type="button" class="ghost small" data-unlater="${esc(d.id)}">Ubah</button></span>`
           : `<div class="garow"><button type="button" class="primary" data-confirm="${esc(d.id)}">${d.kind === 'counted_but_out' ? 'Konfirmasi: ada di sini' : 'Ketemu'}</button>

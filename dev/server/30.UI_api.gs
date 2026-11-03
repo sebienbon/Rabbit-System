@@ -926,13 +926,19 @@ var UIAPI = (function () {
         var dm = damages[e.ref]; if (dm) { dm.decision = e.d.decision; dm.amount = e.d.amount || null; }
       } else if (e.type === 'service' && it) {
         it.condition = 'OK'; if (it.where === 'lost') it.where = 'in';
+        Object.keys(damages).forEach(function (k) { if (damages[k].item === it.id) damages[k].serviced = true; }); // a later damage is a new case
       }
+    });
+    // K2: masks of a trip all returned another way (at the desk, found): the trip is over.
+    Object.keys(trips).forEach(function (k) {
+      var t = trips[k];
+      if (!t.closed && !t.items.some(function (id) { return items[id] && items[id].where === 'sunset'; })) { t.closed = true; t.back = t.items.slice(); }
     });
     var today = gfmt_(new Date(), 'yyyy-MM-dd');
     return {
       items: order.map(function (id) { return items[id]; }),
       diffs: Object.keys(diffs).map(function (k) { return diffs[k]; }).filter(function (d) { return !d.closed; }),
-      damages: Object.keys(damages).map(function (k) { return damages[k]; }).filter(function (d) { return d.decision === 'pending' || !items[d.item] || items[d.item].condition !== 'OK'; }),
+      damages: Object.keys(damages).map(function (k) { return damages[k]; }).filter(function (d) { return d.decision === 'pending' || (!d.serviced && (!items[d.item] || items[d.item].condition !== 'OK')); }),
       trips: Object.keys(trips).map(function (k) { return trips[k]; }).filter(function (t) { return !t.closed || gfmt_(new Date(t.at), 'yyyy-MM-dd') === today; }),
       lastCount: counts.length ? counts[counts.length - 1] : null,
       countedToday: counts.some(function (c) { return gfmt_(new Date(c.at), 'yyyy-MM-dd') === today; })

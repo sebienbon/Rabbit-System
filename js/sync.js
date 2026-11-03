@@ -158,6 +158,9 @@ function tick() {
   if (now >= nextPullAt) { nextPullAt = now + (globalThis.RABBIT_PULL_MS || CONFIG.PULL_EVERY_MS); pullNow(); }
 }
 
+// A tab coming back to the screen (Chrome freezes hidden tabs) refreshes at once.
+try { document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { nextPullAt = 0; nextPushAt = 0; setTimeout(tick, 50); } }); } catch { /* not a page */ }
+
 export function startSync() {
   refreshCounts();
   setInterval(tick, 3000);
