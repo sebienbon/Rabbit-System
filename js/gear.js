@@ -130,14 +130,14 @@ export async function renderGear(root, d) {
 
   // ---- number boxes (type or pick from a short list)
   const pools = {
-    ret: () => g.items.filter(i => i.where === 'out' && !gr.items.includes(i.id)),
+    ret: () => g.items.filter(i => (i.where === 'out' || i.where === 'sunset') && !gr.items.includes(i.id)), // rentals, Volunteer and Sunset Boat
     vol: () => g.items.filter(i => i.where === 'in' && i.condition === 'OK' && !vol.items.includes(i.id)),
   };
   const show = (key, q) => {
     const ul = root.querySelector(`[data-${key}sug]`); if (!ul) return;
     const n = String(q || '').trim().toUpperCase();
     const list = pools[key]().filter(i => !n || i.id.includes(n)).slice(0, 8);
-    ul.innerHTML = list.length ? list.map(i => `<li><button type="button" data-${key}pick="${esc(i.id)}">${esc(i.id)} <span class="muted">${esc(i.last && key === 'ret' ? i.last.guest : i.kind)}</span></button></li>`).join('') : '<li class="muted">No number matches.</li>';
+    ul.innerHTML = list.length ? list.map(i => `<li><button type="button" data-${key}pick="${esc(i.id)}">${esc(i.id)} <span class="muted">${esc(key === 'ret' ? (i.where === 'sunset' ? 'Sunset Boat' : i.last ? i.last.guest : '') : i.kind)}</span></button></li>`).join('') : `<li class="muted">${pools[key]().length ? 'No number matches.' : key === 'ret' ? 'Nothing is out right now.' : 'No mask or bike free.'}</li>`;
     ul.hidden = false;
   };
   const add = (key, id) => {
@@ -149,6 +149,7 @@ export async function renderGear(root, d) {
   for (const key of ['ret', 'vol']) {
     const inp = root.querySelector(`[data-${key}in]`); if (!inp) continue;
     inp.addEventListener('focus', () => show(key, inp.value));
+    inp.addEventListener('click', () => show(key, inp.value)); // already focused: open the list again
     inp.addEventListener('input', () => show(key, inp.value));
     inp.addEventListener('blur', () => setTimeout(() => { const ul = root.querySelector(`[data-${key}sug]`); if (ul && !ul.contains(document.activeElement)) ul.hidden = true; }, 150));
     inp.addEventListener('keydown', e => {

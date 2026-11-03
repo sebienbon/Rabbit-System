@@ -51,7 +51,7 @@ export function applyGearOps(snap, ops, side = 'reception') {
       }
     } else if (op.type === 'gear_return') {
       for (const x of p.items || []) {
-        const it = items.get(x.item); if (!it || it.where !== 'out') continue;
+        const it = items.get(x.item); if (!it || (it.where !== 'out' && it.where !== 'sunset')) continue;
         ret(it, x.condition, op.at); mark(it);
         const did = 'D' + p.gid + '-' + x.item; // same id as the sheet gives it
         if (x.condition && x.condition !== 'OK') damages.set(did, { id: did, item: x.item, condition: x.condition, guest: it.last ? it.last.guest : '', decision: 'pending', pending: true });

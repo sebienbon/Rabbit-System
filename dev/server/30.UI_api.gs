@@ -1550,7 +1550,7 @@ var UIAPI = (function () {
         var it = gearItem_(st, x.item), id = gid + '-' + it.id;
         var cond = GEAR_CONDITIONS.indexOf(x.condition) >= 0 ? x.condition : 'OK';
         if (done.indexOf(id) >= 0) { sgDone.push({ item: it.id, cond: cond }); return; }
-        if (it.where !== 'out') throw apiError_('gear_not_out', it.id + ' is not recorded as out');
+        if (it.where !== 'out' && it.where !== 'sunset') throw apiError_('gear_not_out', it.id + ' is not recorded as out');
         var guest = it.last ? it.last.guest : '';
         rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond } });
         if (cond !== 'OK') rows.push({ at: at, id: 'D' + id, type: 'damage', item: it.id, ref: guest, by: me.username, d: { condition: cond, from: 'return' } });
@@ -1598,7 +1598,8 @@ var UIAPI = (function () {
       var st = gearState_(), t = st.trips.filter(function (x) { return x.trip === trip; })[0];
       if (!t) throw apiError_('line_not_found', 'Unknown Sunset Boat trip');
       var back = (Array.isArray(p.items) ? p.items : []).map(function (id) { return String(id).toUpperCase(); }).filter(function (id) { return t.items.indexOf(id) >= 0; });
-      var missing = t.items.filter(function (id) { return back.indexOf(id) < 0; });
+      var where = {}; st.items.forEach(function (i) { where[i.id] = i.where; });
+      var missing = t.items.filter(function (id) { return back.indexOf(id) < 0 && where[id] === 'sunset'; }); // returned at the desk meanwhile: not missing
       var rows = [{ at: at, id: trip + '-back', type: 'sunset_back', item: '', ref: trip, by: me.username, d: { items: back, missing: missing } }];
       missing.forEach(function (id) {
         var it = gearItem_(st, id);

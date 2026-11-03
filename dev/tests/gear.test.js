@@ -240,3 +240,18 @@ test('QwenWork findings: manager number read from the Note column; a departure o
   assert.deepStrictEqual(g.trips, []);
   assert.ok(g.diffs.some(d => d.item === 'SG001' && d.kind === 'counted_but_out'));
 });
+
+test('Seb 03/11: a Sunset Boat mask can be returned at the desk, and is then not "missing" at the boat return', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  const trip = id('T');
+  push(env, made, op('sunset_out', { trip, items: ['SG001', 'SG002'] }));
+  const r = push(env, ayu, op('gear_return', { gid: id('G'), items: [{ item: 'SG001', condition: 'OK' }] }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  assert.strictEqual(item(gearOf(env, ayu), 'SG001').where, 'in');
+  push(env, made, op('sunset_back', { trip, items: ['SG002'] }));
+  const g = gearOf(env, ayu);
+  assert.deepStrictEqual(g.diffs, []);
+  assert.strictEqual(item(g, 'SG002').where, 'in');
+  assert.strictEqual(env.book['SG'].data[1][3], 'In');
+});
