@@ -104,7 +104,7 @@ export async function renderGear(root, d) {
               ${late && i.last && i.last.kind === 'rental' ? `<a class="ghost small walink" target="_blank" rel="noopener" href="${waText(`Hello ${i.last.guest}, this is The Rabbit Tree reception. Your ${i.kind === 'mask' ? 'snorkeling mask' : 'bike'} ${i.id} was due back ${fmtWhen(i.back)}. Could you bring it back to the reception? Thank you!`)}">WhatsApp guest</a>` : '<span></span>'}</li>`;
           }).join('')}</ul>` : '<p class="muted">Nothing out.</p>'}
           ${g.trips.length ? `<div class="gsunset"><b>Sunset Boat today</b> · ${sunsetOut} mask${sunsetOut === 1 ? '' : 's'} on the boat now · ${sunsetDay} taken today · ${g.sunsetSales} Sunset Boat guest${g.sunsetSales === 1 ? '' : 's'} in the sales
-            ${sunsetDay > g.sunsetSales ? `<span class="warnline small"> — check: more masks taken than guests recorded</span>` : ''}</div>` : ''}
+            ${sunsetDay !== g.sunsetSales ? `<span class="muted small"> · ${Math.abs(sunsetDay - g.sunsetSales)} ${sunsetDay > g.sunsetSales ? 'more' : 'fewer'} mask${Math.abs(sunsetDay - g.sunsetSales) === 1 ? '' : 's'} taken than guests recorded</span>` : ''}</div>` : ''}
         </section>
         ${g.damages.length ? `<section class="card gcard"><h2>Damage to decide</h2><ul class="gl">${g.damages.map(dmgRow).join('')}</ul>
           <p class="muted small">Prices come from the Gear_Settings sheet. Charging adds an Unpaid line to the guest’s bill.</p></section>` : ''}

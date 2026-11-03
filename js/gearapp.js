@@ -123,7 +123,7 @@ function sunset(g) {
     <h1>Berangkat</h1>
     <p class="muted">Penjualan Sunset Boat hari ini: <b>${g.sunsetSales} tamu</b> (termasuk Unpaid). Sentuh masker yang naik perahu.</p>
     ${grid(masks, 'six', it => ui.sel.has(it.id) ? 'on' : '')}
-    ${n && n !== g.sunsetSales ? `<div class="phwarn">${n} masker, tapi ${g.sunsetSales} tamu tercatat. Beri tahu resepsionis jika ada tamu yang belum dicatat.</div>` : ''}
+    ${n && n !== g.sunsetSales ? `<p class="muted small">${n} masker untuk ${g.sunsetSales} tamu tercatat (${n > g.sunsetSales ? '+' : '−'}${Math.abs(n - g.sunsetSales)}).</p>` : ''}
     <button type="button" class="primary wide" data-save="out"${n ? '' : ' disabled'}>Simpan berangkat (${n})</button>
     <p class="muted small center">Tanggal dan jam dicatat otomatis. Kembali sebelum 21:30.</p>
   </div>`;
