@@ -300,3 +300,32 @@ test('QwenWork v11 K1/K2: a repaired damage does not come back; a trip returned 
   const t = gearOf(env, made).trips.find(x => x.trip === trip);
   assert.ok(t.closed, 'trip over');
 });
+
+test('Seb 03/11: gear staff record returns (blind, late ones to the reception) and damage off the Sunset Boat', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  rent(env, ayu, 'Ann', ['SG001'], 1, 'Unpaid');
+  env.book['Gear_Log'].data.forEach(r => { if (r[2] === 'out' && r[3] === 'SG001') r[5] = new Date(Date.now() - 2 * 86400000); }); // was due 2 days ago
+  rent(env, ayu, 'Ben', ['SG002'], 2);                         // on time
+  const r = push(env, made, op('gear_return', { gid: id('G'), items: [
+    { item: 'SG001', condition: 'OK' }, { item: 'SG002', condition: 'Ring missing' }, { item: 'SG003', condition: 'OK' }] }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  let g = gearOf(env, ayu);
+  assert.ok(['SG001', 'SG002', 'SG003'].every(x => item(g, x).where === 'in'), 'returned; SG003 (in) is not an error');
+  const late = g.diffs.find(d => d.kind === 'returned_late');
+  assert.ok(late && late.item === 'SG001' && late.gear && !late.reception && late.late >= 1);
+  assert.ok(g.damages.some(d => d.item === 'SG002' && d.condition === 'Ring missing'));
+  // reception charges the extension
+  const c = push(env, ayu, op('gear_confirm', { cfid: id('F'), diff: late.id, action: 'returned', ext: { ts: newTs() } }));
+  assert.strictEqual(c.results[0].status, 'applied', JSON.stringify(c));
+  const ext = env.book['Entries'].data.find(l => l[16] === 'Extension SG001');
+  assert.ok(ext && ext[12] === 'Ann' && ext[13] === 'Unpaid' && ext[4] === late.late);
+  assert.ok(!gearOf(env, ayu).diffs.some(d => d.id === late.id), 'closed');
+  // Sunset Boat: one mask broken on the way back
+  const trip = id('T');
+  push(env, made, op('sunset_out', { trip, items: ['SG004', 'SG005'] }));
+  push(env, made, op('sunset_back', { trip, items: ['SG004', 'SG005'], conditions: { SG005: 'Broken' } }));
+  g = gearOf(env, ayu);
+  assert.ok(g.damages.some(d => d.item === 'SG005' && d.condition === 'Broken' && d.guest === 'Sunset Boat'));
+  assert.strictEqual(item(g, 'SG005').condition, 'Broken');
+});

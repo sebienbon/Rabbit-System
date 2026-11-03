@@ -766,7 +766,7 @@ var UIAPI = (function () {
     ['Extension per day — mask', 30000, ''], ['Extension per day — bike', '', ''], ['Mask rental product', 'Snorkeling Mask', 'name in Data activities'],
     ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', 'number in column B, e.g. +62 812…']];
   var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Broken', 'Lost'];
-  var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1 }; // what the gear role may send
+  var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1, gear_return: 1 }; // what the gear role may send
   /**
    * SG tab, our own layout: A number, B type (Mask / Bike), C in use (untick to retire a number)
    * are kept by hand; D–H are written by the interface from Gear_Log (do not edit); I is a free note.
@@ -910,7 +910,7 @@ var UIAPI = (function () {
       } else if (e.type === 'count') {
         counts.push({ id: e.id, at: e.at.toISOString(), by: e.by, n: (e.d.items || []).length });
       } else if (e.type === 'diff') {
-        diffs[e.id] = { id: e.id, item: e.item, kind: e.d.kind, at: e.at.toISOString(), count: e.ref, last: e.d.last || null,
+        diffs[e.id] = { id: e.id, item: e.item, kind: e.d.kind, at: e.at.toISOString(), count: e.ref, last: e.d.last || null, late: e.d.late || 0,
           reception: false, gear: false, closed: false, note: '' };
       } else if (e.type === 'confirm') {
         var df = diffs[e.ref];
@@ -1003,6 +1003,34 @@ var UIAPI = (function () {
         d: { kind: 'rental', days: days, saleTs: String(ts), from: from.toISOString() } }]);
     }
     sgUpdate_();
+  }
+  /**
+   * Gear staff: a guest hands numbers back to them. Blind like the check: nothing is refused
+   * and nothing tells them what was out. Late rentals go to the reception, who charges the
+   * extension or waives it (a 'returned_late' difference the gear side has already confirmed).
+   */
+  function gearStaffReturn_(op, me, p, at) {
+    var gid = String(p.gid || ''); if (!/^G[\w-]{6,40}$/.test(gid)) throw apiError_('bad_payload', 'Invalid id');
+    if (gearEventDone_(gid)) return { already: true };
+    var st = gearState_(), rows = [{ at: at, id: gid, type: 'staff_return', item: '', ref: '', by: me.username, d: {} }];
+    (Array.isArray(p.items) ? p.items : []).forEach(function (x) {
+      var it = gearItem_(st, x.item), id = gid + '-' + it.id;
+      var cond = GEAR_CONDITIONS.indexOf(x.condition) >= 0 ? x.condition : 'OK';
+      var guest = it.last ? it.last.guest : '';
+      if (it.where === 'out' || it.where === 'sunset') {
+        rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond, via: 'gear staff' } });
+        var late = it.where === 'out' && it.last && it.last.kind === 'rental' && it.back && at.getTime() > Date.parse(it.back)
+          ? Math.ceil((at.getTime() - Date.parse(it.back)) / 86400000) : 0;
+        if (late) {
+          rows.push({ at: at, id: id + '-late', type: 'diff', item: it.id, ref: gid, by: me.username, d: { kind: 'returned_late', last: it.last, late: late } });
+          rows.push({ at: at, id: id + '-late-g', type: 'confirm', item: it.id, ref: id + '-late', by: me.username, d: { side: 'gear', action: 'returned' } });
+        }
+      }
+      if (cond !== 'OK' && cond !== it.condition) rows.push({ at: at, id: 'D' + id, type: 'damage', item: it.id, ref: guest, by: me.username, d: { condition: cond, from: 'gear return' } });
+    });
+    gearLog_(rows);
+    sgUpdate_();
+    return {};
   }
   function assertGearDesk_(me) {
     if (me.role === 'gear') throw apiError_('forbidden', 'This is done at the reception');
@@ -1570,6 +1598,7 @@ var UIAPI = (function () {
     gear_return: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      if (me.role === 'gear') return gearStaffReturn_(op, me, p, at);
       assertGearDesk_(me);
       var gid = String(p.gid || ''); if (!/^G[\w-]{6,40}$/.test(gid)) throw apiError_('bad_payload', 'Invalid id');
       var st = gearState_(), done = gearLogRows_().map(function (e) { return e.id; }), set = gearSettings_();
@@ -1633,6 +1662,12 @@ var UIAPI = (function () {
         var it = gearItem_(st, id);
         rows.push({ at: at, id: trip + '-m-' + id, type: 'diff', item: id, ref: trip, by: me.username, d: { kind: 'sunset_missing', last: it.last } });
       });
+      // Damage seen when the masks come off the boat: to the reception's decisions.
+      var cond = p.conditions && typeof p.conditions === 'object' ? p.conditions : {};
+      back.forEach(function (id) {
+        var c = GEAR_CONDITIONS.indexOf(cond[id]) >= 0 ? cond[id] : 'OK';
+        if (c !== 'OK') rows.push({ at: at, id: 'D' + trip + '-' + id, type: 'damage', item: id, ref: 'Sunset Boat', by: me.username, d: { condition: c, from: 'sunset' } });
+      });
       gearLog_(rows);
       back.forEach(function (id) { sgUpdate_(id, { status: 'OK' }); });
       return { back: back.length, missing: missing };
@@ -1693,6 +1728,10 @@ var UIAPI = (function () {
           }
         }
       }
+      if (df.kind === 'returned_late' && side === 'reception' && p.action === 'returned' && p.ext && df.last) {
+        var lset = gearSettings_(), lit = gearItem_(st, df.item), lunit = lit.kind === 'mask' ? lset.ext.mask : lset.ext.bike;
+        if (lunit) charges.push({ ts: p.ext.ts, object: lit.kind === 'mask' ? lset.product.mask : lset.product.bike, qty: Math.max(1, Math.round(Number(df.late) || 1)), unit: lunit, guest: df.last.guest, comment: 'Extension ' + lit.id });
+      }
       if (df.kind === 'sunset_missing' && p.action === 'found') { // came back late from the boat
         var sit = gearItem_(st, df.item);
         if (sit.where === 'sunset') rows.push({ at: at, id: cfid + '-r', type: 'return', item: sit.id, ref: 'Sunset Boat', by: me.username, d: { condition: sit.condition, via: 'found' } });
@@ -1712,7 +1751,7 @@ var UIAPI = (function () {
       if (gearEventDone_(lid)) return { already: true };
       var st = gearState_(), df = st.diffs.filter(function (d) { return d.id === String(p.diff); })[0];
       if (!df) throw apiError_('line_not_found', 'This difference is already closed');
-      if (df.kind === 'counted_but_out' || df.kind === 'rented_while_out') throw apiError_('bad_payload', df.item + ' was seen: it cannot be marked lost');
+      if (df.kind === 'counted_but_out' || df.kind === 'rented_while_out' || df.kind === 'returned_late') throw apiError_('bad_payload', df.item + ' was seen: it cannot be marked lost');
       assertCashRight_(me);
       var guest = df.last ? df.last.guest : '';
       gearLog_([{ at: at, id: lid, type: 'lost', item: df.item, ref: df.id, by: me.username, d: {} },

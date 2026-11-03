@@ -133,6 +133,13 @@ const step = m => console.log('  ✓ ' + m);
     await phone.waitForSelector('.gadiff:has-text("SG005") [data-unlater]');
     step('“Belum selesai” keeps it open');
 
+    // Gear staff record a return themselves (blind), with a damage.
+    await phone.click('[data-go="home"]'); await phone.click('[data-go="ret"]');
+    await phone.click('[data-cell="SG008"]'); await phone.click('[data-cell="SG008"]'); await phone.click('[data-cond="Broken"]');
+    await phone.screenshot({ path: `${shots}/g05-staff-return.png` });
+    await phone.click('[data-save="ret"]');
+    await until(() => log().some(r => r[2] === 'staff_return') && log().some(r => r[2] === 'damage' && r[3] === 'SG008'), 'staff return logged');
+    step('gear staff record a return with its condition');
     assert.deepStrictEqual(errors, []);
     console.log('\nE2E GEAR OK');
   } catch (e) {

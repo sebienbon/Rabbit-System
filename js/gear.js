@@ -14,6 +14,7 @@ const DIFF_TEXT = {
   missing: 'Never went out, but not in the box',
   sunset_missing: 'Not back from the Sunset Boat',
   rented_while_out: 'Rented at the desk while recorded elsewhere',
+  returned_late: 'Returned late to the gear staff',
 };
 const waText = t => `https://wa.me/?text=${encodeURIComponent(t)}`;
 
@@ -45,7 +46,12 @@ export async function renderGear(root, d) {
     let acts = '';
     if (df.reception) acts = `<span class="muted">You confirmed · waiting for the gear staff</span>`;
     else if (!allowed) acts = '';
-    else if (df.kind === 'rented_while_out') {
+    else if (df.kind === 'returned_late') {
+      const unit = extPrice(it), days = df.late || 1;
+      acts = unit ? `<button type="button" class="primary small" data-dflate="${esc(df.id)}">Charge ${days} day${days > 1 ? 's' : ''} extension · ${money(days * unit)}</button>
+        <button type="button" class="ghost small" data-dfwaive="${esc(df.id)}">Waive it</button>`
+        : `<span class="small warnline">No extension price in Gear_Settings</span> <button type="button" class="ghost small" data-dfwaive="${esc(df.id)}">Close</button>`;
+    } else if (df.kind === 'rented_while_out') {
       acts = `<button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked · it is with the guest</button>`;
     } else if (df.kind === 'counted_but_out') {
       acts = `${late && extPrice(it) ? `<label class="check small"><input type="checkbox" data-dfext="${esc(df.id)}"${ui.dfNoExt && ui.dfNoExt[df.id] ? '' : ' checked'}> charge ${late} day${late > 1 ? 's' : ''} extension · ${money(late * extPrice(it))}</label>` : ''}
@@ -209,6 +215,8 @@ export async function renderGear(root, d) {
       ui.notice = `${df.item}: ${ds.dfret ? 'returned by the guest' : 'found on site'}. Waiting for the gear staff to confirm.`;
       d.render(); return;
     }
+    if (ds.dflate) { b.disabled = true; await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dflate, action: 'returned', ext: { ts: await nextTs() } }); ui.notice = 'Extension charged (Unpaid).'; d.render(); return; }
+    if (ds.dfwaive) { b.disabled = true; await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dfwaive, action: 'waived' }); ui.notice = 'Extension waived.'; d.render(); return; }
     if (ds.dffound) { b.disabled = true; await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dffound, action: 'found' }); ui.notice = 'Confirmed: found.'; d.render(); return; }
     if (ds.dflost) { ui.dfLost = ds.dflost; d.render(); return; }
     if (ds.dfcancel !== undefined) { ui.dfLost = null; d.render(); return; }
