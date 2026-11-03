@@ -1,6 +1,6 @@
 // End-to-end: Internet cut, computer restarted, Internet back: Chrome + real server code on a fake sheet, with an Internet cut.
 // Run: node tests/e2e-restart.js
-const { chromium } = require('playwright-core');
+const { chromium } = (() => { try { return require('playwright-core'); } catch { return require('playwright'); } })();
 const assert = require('assert');
 const fs = require('fs');
 const { start } = require('./dev-server');

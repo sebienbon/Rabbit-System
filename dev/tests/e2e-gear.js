@@ -1,7 +1,7 @@
 // End-to-end gear (masks & bikes): the reception rents a mask in Sell, the gear staff phone
 // does the Sunset Boat and the blind evening check, both sides solve the differences.
 // Run: node tests/e2e-gear.js
-const { chromium } = require('playwright-core');
+const { chromium } = (() => { try { return require('playwright-core'); } catch { return require('playwright'); } })();
 const assert = require('assert');
 const fs = require('fs');
 const { start } = require('./dev-server');

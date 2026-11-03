@@ -254,6 +254,8 @@ test('settle unpaid: payment, author and timestamp change in both sheets; never 
   assert.strictEqual(push(env, ayu, pay).results[0].status, 'duplicate');
   // A second device tries to collect the same bill: refused, nothing changes.
   r = push(env, dewa, op('settle', { payment: 'Credit / Debit Card', items: [{ oldTs: n1, newTs: newTs() }] }));
+  assert.strictEqual(r.results[0].error, 'forbidden', 'decision 9: staff without an open shift');
+  r = push(env, login(env, 'boss'), op('settle', { payment: 'Credit / Debit Card', items: [{ oldTs: n1, newTs: newTs() }] }));
   assert.strictEqual(r.results[0].error, 'already_paid');
   assert.strictEqual(findE(env, n1)[13], 'Cash');
   r = push(env, ayu, op('settle', { payment: 'Unpaid', items: [{ oldTs: n1, newTs: newTs() }] }));
@@ -552,7 +554,8 @@ test('review: an expense id reused with another amount is a collision, not a tak
   const e1 = expense('Restaurant', 9000);
   push(env, ayu, e1);
   const fake = { ...e1, id: 'other-op', payload: { ...e1.payload, amount: 1 } };
-  assert.strictEqual(push(env, dewa, fake).results[0].error, 'ts_collision');
+  assert.strictEqual(push(env, dewa, fake).results[0].error, 'forbidden', 'decision 9: no open shift');
+  assert.strictEqual(push(env, login(env, 'boss'), { ...fake, id: 'other-op2' }).results[0].error, 'ts_collision');
 });
 
 test('review: expense dates are checked as calendar days', () => {

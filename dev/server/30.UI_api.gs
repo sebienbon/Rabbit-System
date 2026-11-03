@@ -4,18 +4,22 @@
  * Deployed as a Web App that runs as the OWNER, so staff never need access
  * to the spreadsheet. Everything lives inside the UIAPI namespace to avoid
  * colliding with the ~600 global functions already in this project.
- * Only three globals are added: doPost, doGet, UI_setup.
+ * Only four globals are added: doPost, doGet, UI_setup, UI_eveningCheck (daily trigger).
  *
  * Protocol: POST, body = JSON text (Content-Type text/plain, no CORS preflight)
  *   {action:"login", username, password, deviceId, deviceSecret?, registerDevice?}
  *   {action:"pull",  token}
  *   {action:"push",  token, deviceId, ops:[{id, type, at, by, payload}]}
+ *   {action:"ping"}  (is the sheet reachable: closing a shift is refused offline)
  * Response: JSON {ok:true, ...} or {ok:false, error:"code", message}
  *
  * Reliability rules
  *  - A business refusal (bad amount, shift already open...) is final: logged as "rejected".
- *  - Any other failure (Google timeout, quota...) fails the whole push WITHOUT marking
- *    the op as seen, so the device retries it later.
+ *  - Bad data (a field of the wrong type) or a missing sheet: that op alone is "rejected"
+ *    (but "partial" when part of it was already written, e.g. the money).
+ *  - Any other failure (Google timeout, quota, lock...) or the 18 s time budget stops the push
+ *    WITHOUT marking the op as seen (partial; budget:true for the time budget, the device
+ *    sends the rest at once), so the device retries it later.
  *  - Handlers check everything before their first write, and are idempotent by shiftId,
  *    so a retry after a half-finished call never writes twice.
  */
@@ -55,6 +59,10 @@ var UIAPI = (function () {
     if (!s) throw apiError_('missing_sheet', 'Sheet not found: ' + name);
     return s;
   }
+  /** Every tab an operation writes to, checked before its first write (never half an operation). */
+  function needSheets_(names) { names.forEach(sheet_); }
+  // Writes done by the current operation: a missing tab found after one of them is not a refusal.
+  var writes_ = 0;
   function apiError_(code, message) { var e = new Error(message || code); e.apiCode = code; return e; }
   function json_(obj) {
     return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
@@ -87,7 +95,7 @@ var UIAPI = (function () {
   function parseAt_(at) {
     var d = new Date(at);
     if (isNaN(d.getTime())) throw apiError_('bad_time', 'Invalid time');
-    if (d.getTime() - Date.now() > 2 * 86400000) throw apiError_('bad_time', 'Device clock is in the future');
+    if (d.getTime() - Date.now() > 10 * 60000) throw apiError_('bad_time', 'Device clock is in the future');
     if (Date.now() - d.getTime() > MAX_OP_AGE_DAYS * 86400000) throw apiError_('bad_time', 'Device clock is too far in the past');
     return d;
   }
@@ -109,6 +117,7 @@ var UIAPI = (function () {
   }
   /** Writes one row right after the last row that has data in columns A..(row length). */
   function appendAfterData_(sheet, row, dateFormatCols) {
+    writes_++;
     var r = lastRowIn_(sheet, 1, row.length) + 1;
     sheet.getRange(r, 1, 1, row.length).setValues([row]);
     (dateFormatCols || []).forEach(function (c) { sheet.getRange(r, c).setNumberFormat('dd/MM/yyyy'); });
@@ -135,11 +144,31 @@ var UIAPI = (function () {
     users.getRange('F:G').setNumberFormat('@');
     var log = ensureSheet_(SHEETS.log, LOG_HEADER);
     log.getRange('B:B').setNumberFormat('@');
+    log.getRange('C:J').setNumberFormat('@'); // device text never becomes a formula
     var shifts = ensureSheet_(SHEETS.shifts, SHIFTS_HEADER);
     shifts.getRange('A:A').setNumberFormat('@');
-    gearSetup_();
+    // A new sheet must not look older than a test copy the devices already know.
+    var props = PropertiesService.getScriptProperties();
+    if (!props.getProperty('UI_V')) props.setProperty('UI_V', String(1000000));
+    var g = gearSetup_();
     withLock_(hashPendingPasswords_);
-    return 'UI sheets ready: ' + [SHEETS.users, SHEETS.log, SHEETS.shifts, SHEETS.gearLog, SHEETS.gearSettings].join(', ');
+    var trig = installCountTrigger_();
+    return 'UI sheets ready: ' + [SHEETS.users, SHEETS.log, SHEETS.shifts, SHEETS.gearLog, SHEETS.gearSettings].join(', ') +
+      (g.skipped.length ? '. SG numbers NOT imported (unexpected format, add them by hand): ' + g.skipped.join(', ') : '') +
+      '. Evening check reminder: ' + trig;
+  }
+  /** Daily 21:30 (WITA) trigger that emails when the evening check is not done; installed once. */
+  var COUNT_TRIGGER_FN = 'UI_eveningCheck';
+  function installCountTrigger_() {
+    try {
+      var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === COUNT_TRIGGER_FN; });
+      if (has) return 'already installed';
+      ScriptApp.newTrigger(COUNT_TRIGGER_FN).timeBased().atHour(21).nearMinute(30).everyDays(1).inTimezone('Asia/Makassar').create();
+      return 'installed';
+    } catch (e) {
+      console.error(e);
+      return 'NOT installed (' + e.message + ')';
+    }
   }
 
   // ---------- users, devices & sessions ----------
@@ -269,8 +298,9 @@ var UIAPI = (function () {
     var me = auth_(sess);
     if (me.role === 'gear') { // the gear app sees only what the blind check allows
       return { me: publicUser_(me), registered: !!sess.reg, serverTime: new Date().toISOString(), shift: { v: version_() },
-        gear: ss_().getSheetByName(SHEETS.sg) ? gearForStaffApp_(gearState_()) : null };
+        gear: ss_().getSheetByName(SHEETS.sg) ? gearForStaffApp_(gearState_(), null) : null };
     }
+    var ent = ss_().getSheetByName(SHEETS.entries) ? entries_() : null; // read once for the whole answer
     var out = {
       me: publicUser_(me),
       registered: !!sess.reg,
@@ -279,16 +309,16 @@ var UIAPI = (function () {
       payments: readPayments_(),
       guests: readGuests_(),
       shift: shiftState_(),
-      lines: readLines_(),
+      lines: readLines_(ent),
       cashbox: readCashbox_(),
-      partners: readPartners_(),
+      partners: readPartners_(ent),
       settlement: lastSettlement_(),
-      gear: ss_().getSheetByName(SHEETS.sg) ? gearForReception_(gearState_()) : null,
+      gear: ss_().getSheetByName(SHEETS.sg) ? gearForReception_(gearState_(), ent) : null,
       bar: readBarCashouts_() // TEMPORARY (bar cash-out): remove with the BAR CASH-OUT block below
     };
     if (sess.reg) {
-      // Hashes let the registered reception computer check passwords during an outage.
-      out.users = readUsers_().filter(function (u) { return u.active && u.hash; }).map(function (u) {
+      // Hashes let the registered reception computer check passwords during an outage: staff only.
+      out.users = readUsers_().filter(function (u) { return u.active && u.hash && u.role === 'staff'; }).map(function (u) {
         return { username: u.username, name: u.name, role: u.role, author: u.author || u.username, hash: u.hash, salt: u.salt, rounds: HASH_ROUNDS };
       });
     }
@@ -367,11 +397,19 @@ var UIAPI = (function () {
     var log = ss_().getSheetByName(SHEETS.log);
     return Math.max(Number(PropertiesService.getScriptProperties().getProperty('UI_V') || 0), log ? log.getLastRow() : 0);
   }
-  /** Who entered each line through the interface: line id -> username (from UI_Log sale entries). */
+  /**
+   * Who entered each line through the interface: line id -> username (from UI_Log sale entries).
+   * UI_Log only grows: within one request, later calls read only the rows added since.
+   */
+  var soldCache_ = null;
   function soldBy_() {
-    var log = ss_().getSheetByName(SHEETS.log), out = {};
-    if (!log || log.getLastRow() < 2) return out;
-    log.getRange(2, 4, log.getLastRow() - 1, 7).getValues().forEach(function (r) {
+    var log = ss_().getSheetByName(SHEETS.log);
+    if (!log || log.getLastRow() < 2) return {};
+    var c = soldCache_ || (soldCache_ = { upTo: 1, map: {} }), out = c.map, last = log.getLastRow();
+    if (last <= c.upTo) return out;
+    var from = c.upTo + 1;
+    c.upTo = last;
+    log.getRange(from, 4, last - from + 1, 7).getValues().forEach(function (r) {
       if (r[4] !== 'applied') return;
       try {
         if (r[1] === 'sale') {
@@ -457,15 +495,17 @@ var UIAPI = (function () {
   /** Appends Entries rows (17 columns) after the last data row; timestamps stay text. */
   function appendEntries_(ent, rows) {
     if (!rows.length) return;
+    writes_++;
     var r = ent.last + 1;
     ent.sheet.getRange(r, E.ts + 1, rows.length, 1).setNumberFormat('@');
     ent.sheet.getRange(r, 1, rows.length, 17).setValues(rows.map(function (row) { return row.map(safe_); }));
-    ent.sheet.getRange(r, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
+    ent.sheet.getRange(r, 1, rows.length, 1).setNumberFormat('dd/MM/yyyy'); // like Entries Manual
     ent.last += rows.length;
   }
   /** Appends Entries Manual rows from Entries-shaped rows, leaving the formula columns alone. */
   function appendManual_(man, entryRows, colI) {
     if (!entryRows.length) return;
+    writes_++;
     var r = man.last + 1, n = entryRows.length, s = man.sheet;
     var rng = s.getRange(r, 1, n, 17);
     var formulas = rng.getFormulas(), current = rng.getValues();
@@ -489,6 +529,9 @@ var UIAPI = (function () {
     if (String(sheet.getRange(rowNo, col).getValue()) !== String(ts)) throw new Error('Rows moved in ' + sheet.getName() + '; will retry');
   }
   var same_ = function (a, b) { return String(a).replace(/^'/, '') === String(b).replace(/^'/, ''); };
+  /** Product names (rental products of Gear_Settings): case and spaces do not matter (same rule as gearcore.js). */
+  var nameKey_ = function (v) { return String(v === null || v === undefined ? '' : v).replace(/^'/, '').replace(/\s+/g, ' ').trim().toLowerCase(); };
+  var sameName_ = function (a, b) { return nameKey_(a) === nameKey_(b); };
   function lineOut_(r) {
     return { ts: String(r[E.ts]), date: iso_(r[E.date]), type: String(r[E.type]), category: String(r[E.sub]),
       object: String(r[E.obj]), qty: r[E.qty] === '' ? null : num_(r[E.qty]), unit: num_(r[E.unit]),
@@ -498,11 +541,11 @@ var UIAPI = (function () {
   }
   var REFUND_MARKS = ['Refunded', 'Refunding'];
   /** Lines the device keeps: everything unpaid, plus the last LINE_DAYS days. */
-  function readLines_() {
-    if (!ss_().getSheetByName(SHEETS.entries)) return [];
+  function readLines_(ent) {
+    if (!ent) return [];
     var from = tsOf_(new Date(Date.now() - LINE_DAYS * 86400000));
     var sold = soldBy_();
-    return entries_().rows.filter(function (r) {
+    return ent.rows.filter(function (r) {
       var t = String(r[E.ts]);
       return isTs_(t) && (t >= from || String(r[E.pay]) === 'Unpaid');
     }).map(function (r) { var l = lineOut_(r); if (sold[l.ts]) l.soldBy = sold[l.ts]; return l; });
@@ -630,12 +673,12 @@ var UIAPI = (function () {
   /** What one line adds to the bill: its cost if the guest paid us, cost − price if the guest paid the partner. */
   function billNet_(r) { return Math.round(String(r[E.pay]) === PAID_TO_PARTNER ? costOf_(r) - priceOf_(r) : costOf_(r)); }
   /** Partner sales not settled yet (not billed, or on a bill), however old. */
-  function readPartners_() {
+  function readPartners_(ent) {
     var items = partnerItems_();
     var set = {};
     items.forEach(function (it) { set[it.object] = true; });
     var lines = [], seen = {};
-    if (ss_().getSheetByName(SHEETS.entries)) entries_().rows.forEach(function (r) {
+    if (ent) ent.rows.forEach(function (r) {
       var st = String(r[E.status] || '').trim();
       if (!isPartnerSale_(r, set) || !(st === '' || BILL_RE.test(st)) || seen[String(r[E.ts])]) return;
       seen[String(r[E.ts])] = true;
@@ -682,7 +725,8 @@ var UIAPI = (function () {
    * Sends one email once per operation (a retry after a later failure does not send it again).
    * A mail failure (quota, bad address) never blocks the operation: it comes back as a warning.
    */
-  var MAIL_KINDS = ['cost', 'bill', 'settle'];
+  var MAIL_KINDS = ['cost', 'bill', 'settle', 'close'];
+  var ALERT_TO = ['therabbittreemanager@gmail.com', 'sebien.legoff@gmail.com']; // manager, owner
   function mailOnce_(op, kind, msg) {
     var props = PropertiesService.getScriptProperties(), key = 'UI_MAIL_' + op.id + '_' + kind;
     if (props.getProperty(key)) return '';
@@ -761,9 +805,9 @@ var UIAPI = (function () {
   // the current state is the replay of that log over the SG sheet. Gear_Settings holds the
   // prices (part, price) and the manager's WhatsApp number.
   var GEAR_LOG_HEADER = ['At', 'Event id', 'Type', 'Item', 'Guest / trip', 'Back before', 'By', 'Detail'];
-  var GEAR_SETTINGS_DEFAULT = [['Part / setting', 'Price (Rp)', 'Note'], ['Snorkel', '', ''], ['Mask (without snorkel)', '', ''],
-    ['Ring', '', ''], ['Full snorkeling set (lost)', '', ''], ['Bike — repair', '', 'reception types the amount if empty'],
-    ['Extension per day — mask', 30000, ''], ['Extension per day — bike', '', ''], ['Mask rental product', 'Snorkeling Mask', 'name in Data activities'],
+  var GEAR_SETTINGS_DEFAULT = [['Part / setting', 'Price (Rp)', 'Note'], ['Snorkel', 50000, ''], ['Mask (without snorkel)', 100000, ''],
+    ['Ring', 15000, ''], ['Full snorkeling set (lost)', 150000, ''], ['Bike — repair', '', 'reception types the amount if empty'],
+    ['Extension per day — mask', 30000, ''], ['Extension per day — bike', 50000, ''], ['Mask rental product', 'Snorkeling Mask', 'name in Data activities'],
     ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', 'number in column B, e.g. +62 812…']];
   var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Mask missing', 'Part missing', 'Broken', 'Other', 'Lost'];
   var gnote_ = function (v) { return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 300); }; // comment on a damage
@@ -774,16 +818,21 @@ var UIAPI = (function () {
    */
   var SG_HEADER = ['Number', 'Type', 'In use', 'Status (auto)', 'Guest / trip (auto)', 'Since (auto)', 'Back before (auto)', 'Condition (auto)', 'Note'];
   function gearSetup_() {
-    ensureSheet_(SHEETS.gearLog, GEAR_LOG_HEADER).getRange('B:B').setNumberFormat('@');
+    var glog = ensureSheet_(SHEETS.gearLog, GEAR_LOG_HEADER);
+    glog.getRange('B:E').setNumberFormat('@'); // ids, item and guest typed at the desk stay text
+    glog.getRange('G:G').setNumberFormat('@'); // (F is the back-before date)
     var sg = ss_().getSheetByName(SHEETS.sg);
     if (!sg) sg = ss_().insertSheet(SHEETS.sg);
     var head = sg.getLastRow() >= 1 ? sg.getRange(1, 1, 1, 2).getValues()[0] : ['', ''];
+    var skipped = [];
     if (String(head[0]) !== 'Number' || String(head[1]) !== 'Type') {
       // Old test layout: keep only the list of numbers, everything else comes from Gear_Log.
+      // A number in another format is not imported but reported, never dropped silently.
       var ids = [], seen = {};
       if (sg.getLastRow() >= 2) sg.getRange(2, 1, sg.getLastRow() - 1, 1).getValues().forEach(function (r) {
-        var id = String(r[0]).trim().toUpperCase();
-        if (id && !seen[id] && /^[A-Z]{1,3}\d+$/.test(id)) { seen[id] = 1; ids.push(id); }
+        var raw = String(r[0]).trim(), id = raw.toUpperCase();
+        if (!id || seen[id]) return;
+        if (/^[A-Z]{1,3}\d+$/.test(id)) { seen[id] = 1; ids.push(id); } else if (skipped.indexOf(raw) < 0) skipped.push(raw);
       });
       sg.clearContents();
       var rows = [SG_HEADER].concat(ids.map(function (id) { return [id, gearKind_(id) === 'bike' ? 'Bike' : 'Mask', true, 'In', '', '', '', 'OK', '']; }));
@@ -794,14 +843,22 @@ var UIAPI = (function () {
       var s = ss_().insertSheet(SHEETS.gearSettings);
       s.getRange(1, 1, GEAR_SETTINGS_DEFAULT.length, 3).setValues(GEAR_SETTINGS_DEFAULT);
     }
+    return { skipped: skipped };
   }
   function gearSettings_() {
     var s = ss_().getSheetByName(SHEETS.gearSettings), map = {};
     var rows = s && s.getLastRow() >= 2 ? s.getRange(2, 1, s.getLastRow() - 1, 3).getValues() : GEAR_SETTINGS_DEFAULT.slice(1);
     rows.forEach(function (r) { if (String(r[0]).trim()) map[String(r[0]).trim()] = r[1]; });
-    // The number is sometimes typed in the Note column: take it there when B is empty.
+    // Manager number: column B, else the Note column; the first with 8 digits or more. 0812… is
+    // 62812…; 812… is a 0812… the sheet turned into a number (lost its 0).
+    var wa = '';
     rows.forEach(function (r) {
-      if (String(r[0]).trim() === 'Manager WhatsApp' && !String(r[1] || '').trim() && /\d{8,}/.test(String(r[2] || '').replace(/\D/g, ''))) map['Manager WhatsApp'] = r[2];
+      if (wa || String(r[0]).trim() !== 'Manager WhatsApp') return;
+      [r[1], r[2]].forEach(function (v) {
+        var d = String(v === null || v === undefined ? '' : typeof v === 'number' ? v.toFixed(0) : v).replace(/\D/g, '');
+        if (wa || d.length < 8) return;
+        wa = '+' + (d.charAt(0) === '0' ? '62' + d.slice(1) : d.charAt(0) === '8' ? '62' + d : d);
+      });
     });
     var price = function (k) { var v = map[k]; return v === '' || v === undefined || v === null ? null : num_(v); };
     return {
@@ -809,7 +866,7 @@ var UIAPI = (function () {
         'Lost': price('Full snorkeling set (lost)'), 'Mask missing': price('Mask (without snorkel)'), 'Bike': price('Bike — repair') },
       ext: { mask: price('Extension per day — mask'), bike: price('Extension per day — bike') },
       product: { mask: String(map['Mask rental product'] || 'Snorkeling Mask'), bike: String(map['Bike rental product'] || 'Rabbit bike') },
-      managerWa: String(map['Manager WhatsApp'] || '').replace(/[^\d+]/g, '')
+      managerWa: wa
     };
   }
   var gearKind_ = function (id) { return /^SG/i.test(id) ? 'mask' : 'bike'; };
@@ -832,19 +889,27 @@ var UIAPI = (function () {
   function gearLogRows_() {
     var s = ss_().getSheetByName(SHEETS.gearLog);
     if (!s || s.getLastRow() < 2) return [];
-    return s.getRange(2, 1, s.getLastRow() - 1, 8).getValues().map(function (r) {
+    var out = [];
+    s.getRange(2, 1, s.getLastRow() - 1, 8).getValues().forEach(function (r) {
+      var at = r[0] instanceof Date ? r[0] : new Date(r[0]);
+      if (r[0] === '' || isNaN(at.getTime())) return; // unreadable row (typed by hand): ignored, not fatal
       var det = {}; try { det = JSON.parse(r[7] || '{}'); } catch (e) { det = {}; }
-      return { at: r[0] instanceof Date ? r[0] : new Date(r[0]), id: String(r[1]), type: String(r[2]), item: String(r[3]), ref: String(r[4]),
-        back: r[5] ? new Date(r[5]) : null, by: String(r[6]), d: det };
+      var back = r[5] ? new Date(r[5]) : null;
+      if (back && isNaN(back.getTime())) back = null;
+      out.push({ at: at, id: String(r[1]), type: String(r[2]), item: String(r[3]), ref: String(r[4]), back: back, by: String(r[6]), d: det || {} });
     });
+    return out;
   }
   function gearLog_(rows) {
     if (!rows.length) return;
     var s = sheet_(SHEETS.gearLog);
+    writes_++;
     var r = lastRowIn_(s, 1, 3) + 1;
-    s.getRange(r, 2, rows.length, 1).setNumberFormat('@');
+    s.getRange(r, 2, rows.length, 4).setNumberFormat('@'); // B:E and G are text (a number typed at the desk is never a formula)
+    s.getRange(r, 7, rows.length, 1).setNumberFormat('@');
     s.getRange(r, 1, rows.length, 8).setValues(rows.map(function (x) {
-      return [x.at, x.id, x.type, x.item || '', safe_(String(x.ref || '')), x.back || '', x.by || '', JSON.stringify(x.d || {})];
+      return [x.at, safe_(String(x.id || '')), safe_(String(x.type || '')), safe_(String(x.item || '')), safe_(String(x.ref || '')), x.back || '',
+        safe_(String(x.by || '')), safe_(JSON.stringify(x.d || {}))];
     }));
   }
   /** Keeps the SG sheet as the old dialogs did (B status, C guest, D time, E days, F back before). */
@@ -889,8 +954,11 @@ var UIAPI = (function () {
         it.where = 'out'; it.back = e.back ? e.back.toISOString() : null;
         it.last = { kind: e.d.kind || 'rental', guest: e.ref, from: e.d.from || e.at.toISOString(), saleTs: e.d.saleTs || '' };
       } else if (e.type === 'return' && it) {
-        it.where = 'in'; it.back = null; it.condition = e.d.condition || 'OK';
+        it.back = null; it.condition = e.d.condition || 'OK';
+        it.where = it.condition === 'Lost' ? 'lost' : 'in'; // returned as lost: stays out of service
         if (it.last) it.last.returned = e.at.toISOString();
+      } else if (e.type === 'relink') { // a paid bill gave the rental line a new id
+        order.forEach(function (k) { var x = items[k]; if (x.last && x.last.saleTs && String(x.last.saleTs) === String(e.d.from)) x.last.saleTs = String(e.d.to); });
       } else if (e.type === 'sunset_out') {
         if (!(e.d.items || []).length) return; // every number touched was already out: only differences, no trip
         trips[e.ref] = trips[e.ref] || { trip: e.ref, at: e.at.toISOString(), by: e.by, items: [], back: [], closed: false };
@@ -904,15 +972,18 @@ var UIAPI = (function () {
         var t = trips[e.ref];
         (e.d.items || []).forEach(function (id) {
           var x = items[id]; if (!x) return;
-          x.where = 'in'; x.back = null; if (x.last) x.last.returned = e.at.toISOString();
           if (t) t.back.push(id);
+          if (x.where !== 'sunset') return; // returned at the desk or rented again meanwhile
+          x.where = 'in'; x.back = null; if (x.last) x.last.returned = e.at.toISOString();
         });
         if (t) t.closed = true;
       } else if (e.type === 'count') {
-        counts.push({ id: e.id, at: e.at.toISOString(), by: e.by, n: (e.d.items || []).length });
+        counts.push({ id: e.id, at: e.at.toISOString(), by: e.by, n: (e.d.items || []).length,
+          seen: (e.d.items || []).map(function (x) { return String(x && x.item || ''); }) });
       } else if (e.type === 'diff') {
         diffs[e.id] = { id: e.id, item: e.item, kind: e.d.kind, at: e.at.toISOString(), count: e.ref, last: e.d.last || null, late: e.d.late || 0, due: e.d.due || null, returned: e.d.returned || null,
           reception: false, gear: false, closed: false, note: '' };
+        if (e.d.kind === 'sale_unlinked') { diffs[e.id].reason = e.d.reason || ''; diffs[e.id].saleTs = e.d.saleTs || ''; diffs[e.id].guest = e.d.guest || ''; diffs[e.id].object = e.d.object || ''; }
       } else if (e.type === 'confirm') {
         var df = diffs[e.ref];
         if (df) { df[e.d.side] = true; if (e.d.note) df.note = e.d.note; if (df.reception && df.gear) df.closed = true; }
@@ -923,6 +994,7 @@ var UIAPI = (function () {
         damages[e.id] = { id: e.id, item: e.item, condition: e.d.condition, note: e.d.note || '', at: e.at.toISOString(), guest: e.ref, from: e.d.from || 'return',
           decision: 'pending', amount: null };
         if (it && e.d.condition !== 'OK') it.condition = e.d.condition;
+        if (it && e.d.condition === 'Lost') { it.where = 'lost'; it.back = null; } // seen lost off the boat or at the check: out of service
       } else if (e.type === 'decide') {
         var dm = damages[e.ref]; if (dm) { dm.decision = e.d.decision; dm.amount = e.d.amount || null; }
       } else if (e.type === 'service' && it) {
@@ -935,43 +1007,83 @@ var UIAPI = (function () {
       var t = trips[k];
       if (!t.closed && !t.items.some(function (id) { return items[id] && items[id].where === 'sunset'; })) { t.closed = true; t.back = t.items.slice(); }
     });
-    var today = gfmt_(new Date(), 'yyyy-MM-dd');
+    var today = gfmt_(new Date(), 'yyyy-MM-dd'), nowMs = Date.now();
+    order.forEach(function (id) { var x = items[id]; if (x.where === 'out') x.lateDays = lateDays_(x, counts, nowMs); });
     return {
+      counts: counts,
       items: order.map(function (id) { return items[id]; }),
       diffs: Object.keys(diffs).map(function (k) { return diffs[k]; }).filter(function (d) { return !d.closed; }),
       damages: Object.keys(damages).map(function (k) { return damages[k]; }).filter(function (d) { return d.decision === 'pending' || (!d.serviced && (!items[d.item] || items[d.item].condition !== 'OK')); }),
       trips: Object.keys(trips).map(function (k) { return trips[k]; }).filter(function (t) { return !t.closed || gfmt_(new Date(t.at), 'yyyy-MM-dd') === today; }),
-      lastCount: counts.length ? counts[counts.length - 1] : null,
+      lastCount: counts.length ? publicCount_(counts[counts.length - 1]) : null,
       countedToday: counts.some(function (c) { return gfmt_(new Date(c.at), 'yyyy-MM-dd') === today; })
     };
   }
+  function publicCount_(c) { return { id: c.id, at: c.at, by: c.by, n: c.n }; }
+  /**
+   * Extension days owed: the 18:00 return time is only what the guest is told. A day is
+   * charged only when an evening check (count) made after the return time did not find
+   * the item, i.e. it was still out; at most one per day, up to untilMs (return time).
+   */
+  function lateDays_(it, counts, untilMs) {
+    if (!it || !it.back) return 0;
+    var b = Date.parse(it.back), days = {};
+    (counts || []).forEach(function (c) {
+      var t = Date.parse(c.at);
+      if (t > b && t <= untilMs && (c.seen || []).indexOf(it.id) < 0) days[gfmt_(new Date(t), 'yyyy-MM-dd')] = 1;
+    });
+    return Object.keys(days).length;
+  }
+  var COUNTS_DAYS = 45; // evening checks sent to the reception (rentals last 30 days at most)
   /** Sunset Boat guests recorded in today's sales (quantity of "Sunset Boat" lines, Unpaid included). */
-  function sunsetSalesToday_() {
-    if (!ss_().getSheetByName(SHEETS.entries)) return 0;
+  function sunsetSalesToday_(ent) {
+    if (!ent) return 0;
     var today = tsOf_(new Date()).slice(0, 8), n = 0;
-    entries_().rows.forEach(function (r) {
+    ent.rows.forEach(function (r) {
       if (String(r[E.type]) === 'Income' && /sunset boat/i.test(String(r[E.obj])) && String(r[E.ts]).slice(0, 8) === today &&
           REFUND_ANY.indexOf(String(r[E.comment]).trim()) < 0) n += num_(r[E.qty]) || 1;
     });
     return n;
   }
   /** What the gear app may see: the list of numbers only (the check is blind), trips, differences. */
-  function gearForStaffApp_(st) {
+  function gearForStaffApp_(st, ent) {
     var set = gearSettings_();
+    if (ent === null && ss_().getSheetByName(SHEETS.entries)) ent = entries_();
     return { items: st.items.map(function (i) { return { id: i.id, kind: i.kind }; }), trips: st.trips,
       diffs: st.diffs.filter(function (d) { return d.kind !== 'returned_late' && d.kind !== 'returned_not_out'; }), // reception's business; would tell what was out
-      countedToday: st.countedToday, lastCount: st.lastCount, sunsetSales: sunsetSalesToday_(), managerWa: set.managerWa,
+      countedToday: st.countedToday, lastCount: st.lastCount, sunsetSales: sunsetSalesToday_(ent), managerWa: set.managerWa,
       unavailable: st.items.filter(function (i) { return i.condition !== 'OK' || i.where === 'lost'; }).map(function (i) { return i.id; }) };
   }
-  function gearForReception_(st) {
-    var set = gearSettings_();
+  function gearForReception_(st, ent) {
+    var set = gearSettings_(), from = Date.now() - COUNTS_DAYS * 86400000;
     return { items: st.items, diffs: st.diffs, damages: st.damages, trips: st.trips, countedToday: st.countedToday, lastCount: st.lastCount,
-      sunsetSales: sunsetSalesToday_(), prices: set.prices, ext: set.ext, product: set.product, managerWa: set.managerWa };
+      counts: st.counts.filter(function (c) { return Date.parse(c.at) >= from; }).map(function (c) { return { at: c.at, seen: c.seen }; }),
+      sunsetSales: sunsetSalesToday_(ent), prices: set.prices, ext: set.ext, product: set.product, managerWa: set.managerWa };
   }
+  function findGear_(st, id) { return st.items.filter(function (i) { return i.id === String(id || '').trim().toUpperCase(); })[0] || null; }
   function gearItem_(st, id) {
-    var it = st.items.filter(function (i) { return i.id === String(id || '').trim().toUpperCase(); })[0];
+    var it = findGear_(st, id);
     if (!it) throw apiError_('bad_payload', 'Unknown gear number ' + id);
     return it;
+  }
+  /** Extension charge for a rental, never more days than the evening checks show (see lateDays_). */
+  function extCharge_(st, set, it, guest, ext, untilMs, warn) {
+    if (!ext || !it.last || it.last.kind !== 'rental') return null;
+    var unit = it.kind === 'mask' ? set.ext.mask : set.ext.bike;
+    if (!unit) return null;
+    var late = lateDays_(it, st.counts, untilMs);
+    if (!late) { warn.push('No extension for ' + it.id + ': it was not out at an evening check after its return time.'); return null; }
+    var asked = Math.round(Number(ext.days) || late);
+    return { ts: ext.ts, object: it.kind === 'mask' ? set.product.mask : set.product.bike, qty: Math.max(1, Math.min(late, asked)), unit: unit,
+      guest: guest, comment: 'Extension ' + it.id };
+  }
+  /** An operation of this type and id (UI_Log F) was accepted, e.g. a Sunset Boat departure with nothing to write. */
+  function loggedOp_(type, ref) {
+    var log = ss_().getSheetByName(SHEETS.log);
+    if (!log || log.getLastRow() < 2) return false;
+    return log.getRange(2, 5, log.getLastRow() - 1, 4).getValues().some(function (r) {
+      return String(r[0]) === type && String(r[1]).replace(/^'/, '') === ref && String(r[3]) === 'applied';
+    });
   }
   function gearEventDone_(id) { return gearLogRows_().some(function (e) { return e.id === id; }); }
   /** Unpaid sale lines for a guest (extension, damage), written like the sale handler writes them. */
@@ -985,6 +1097,24 @@ var UIAPI = (function () {
     var ent = entries_(), man = manual_();
     appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }));
     appendManual_(man, rows.filter(function (r) { return !man.byTs[r[E.ts]]; }));
+  }
+  function isRentalObj_(obj) {
+    if (!ss_().getSheetByName(SHEETS.sg)) return false;
+    var set = gearSettings_();
+    return sameName_(obj, set.product.mask) || sameName_(obj, set.product.bike);
+  }
+  /** A paid bill changes the line id: the number out on that rental follows ('relink' in Gear_Log). */
+  function gearRelink_(me, at, todo) {
+    if (!ss_().getSheetByName(SHEETS.gearLog) || !ss_().getSheetByName(SHEETS.sg)) return;
+    var st = gearState_(), done = {}, rows = [];
+    gearLogRows_().forEach(function (e) { done[e.id] = 1; });
+    todo.forEach(function (t) {
+      var id = 'G' + t.newTs + '-rl';
+      if (done[id] || t.oldTs === t.newTs) return;
+      if (!st.items.some(function (i) { return i.last && String(i.last.saleTs) === t.oldTs; })) return;
+      rows.push({ at: at, id: id, type: 'relink', item: '', ref: t.oldTs, by: me.username, d: { from: t.oldTs, to: t.newTs } });
+    });
+    gearLog_(rows);
   }
   /**
    * A rental line was corrected (days = quantity, guest) or deleted: the number still out on
@@ -1014,9 +1144,12 @@ var UIAPI = (function () {
   function gearStaffReturn_(op, me, p, at) {
     var gid = String(p.gid || ''); if (!/^G[\w-]{6,40}$/.test(gid)) throw apiError_('bad_payload', 'Invalid id');
     if (gearEventDone_(gid)) return { already: true };
-    var st = gearState_(), rows = [{ at: at, id: gid, type: 'staff_return', item: '', ref: '', by: me.username, d: {} }];
+    var st = gearState_(), rows = [{ at: at, id: gid, type: 'staff_return', item: '', ref: '', by: me.username, d: {} }], skipped = [], seen = {};
     (Array.isArray(p.items) ? p.items : []).forEach(function (x) {
-      var it = gearItem_(st, x.item), id = gid + '-' + it.id;
+      var it = findGear_(st, x && x.item);
+      if (!it || seen[it.id]) { skipped.push(String(x && x.item || '').slice(0, 20)); return; } // unknown number: the others go on
+      seen[it.id] = 1;
+      var id = gid + '-' + it.id;
       var cond = GEAR_CONDITIONS.indexOf(x.condition) >= 0 ? x.condition : 'OK';
       var guest = it.last ? it.last.guest : '';
       if (it.where !== 'out' && it.where !== 'sunset') {
@@ -1027,8 +1160,7 @@ var UIAPI = (function () {
       }
       if (it.where === 'out' || it.where === 'sunset') {
         rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond, via: 'gear staff' } });
-        var late = it.where === 'out' && it.last && it.last.kind === 'rental' && it.back && at.getTime() > Date.parse(it.back)
-          ? Math.ceil((at.getTime() - Date.parse(it.back)) / 86400000) : 0;
+        var late = it.where === 'out' && it.last && it.last.kind === 'rental' ? lateDays_(it, st.counts, at.getTime()) : 0;
         if (late) {
           rows.push({ at: at, id: id + '-late', type: 'diff', item: it.id, ref: gid, by: me.username, d: { kind: 'returned_late', last: it.last, late: late, due: it.back, returned: at.toISOString() } });
           rows.push({ at: at, id: id + '-late-g', type: 'confirm', item: it.id, ref: id + '-late', by: me.username, d: { side: 'gear', action: 'returned' } });
@@ -1038,7 +1170,7 @@ var UIAPI = (function () {
     });
     gearLog_(rows);
     sgUpdate_();
-    return {};
+    return skipped.length ? { skipped: skipped } : {};
   }
   function assertGearDesk_(me) {
     if (me.role === 'gear') throw apiError_('forbidden', 'This is done at the reception');
@@ -1070,25 +1202,46 @@ var UIAPI = (function () {
       });
       var seen = {};
       rows.forEach(function (r) { if (seen[r[E.ts]]) throw apiError_('bad_payload', 'Duplicate line id'); seen[r[E.ts]] = 1; });
+      // Rental days are whole days.
+      var hasGearSheet = !!ss_().getSheetByName(SHEETS.sg);
+      var gset = hasGearSheet ? gearSettings_() : null;
+      lines.forEach(function (l, i) {
+        var rental = l.gear || (gset && (sameName_(rows[i][E.obj], gset.product.mask) || sameName_(rows[i][E.obj], gset.product.bike)));
+        if (rental && (Math.round(rows[i][E.qty]) !== rows[i][E.qty] || rows[i][E.qty] < 1)) {
+          throw apiError_('bad_amount', 'Rental of ' + rows[i][E.obj] + ': the quantity is the number of days, a whole number (1 or more)');
+        }
+      });
       // Gear rental: one line per mask or bike, its number in `gear`; it leaves the stock now.
+      // The money is never refused for a gear reason: a number already out is first returned
+      // (no extension for the previous guest); an unknown, unavailable or wrong-type number is
+      // not linked and becomes a 'sale_unlinked' difference for the reception and the gear staff.
       var gearOut = [], gearSg = [];
-      if (lines.some(function (l) { return l.gear; })) {
-        var gst = gearState_(), gset = gearSettings_(), gdone = gearLogRows_().map(function (e) { return e.id; }), used = {};
+      if (hasGearSheet && lines.some(function (l) { return l.gear; })) {
+        var gst = gearState_(), gdone = {}, used = {};
+        gearLogRows_().forEach(function (e) { gdone[e.id] = 1; });
         lines.forEach(function (l, i) {
           if (!l.gear) return;
-          var it = gearItem_(gst, l.gear), id = 'G' + rows[i][E.ts];
-          if (used[it.id]) throw apiError_('bad_payload', it.id + ' is twice in the sale');
+          var ts = rows[i][E.ts], id = 'G' + ts, it = findGear_(gst, l.gear);
+          var reason = !it ? 'unknown' : used[it.id] ? 'duplicate' :
+            !sameName_(rows[i][E.obj], it.kind === 'mask' ? gset.product.mask : gset.product.bike) ? 'wrong_product' :
+            gdone[id] ? '' : (it.where === 'lost' || it.condition !== 'OK') ? 'unavailable' : '';
+          if (reason) {
+            if (!gdone[id + '-u']) gearOut.push({ at: at, id: id + '-u', type: 'diff', item: it ? it.id : String(l.gear).trim().toUpperCase().slice(0, 20), ref: id, by: me.username,
+              d: { kind: 'sale_unlinked', reason: reason, saleTs: ts, guest: rows[i][E.guest], object: rows[i][E.obj], last: it ? it.last : null } });
+            return;
+          }
           used[it.id] = true;
-          if (same_(rows[i][E.obj], it.kind === 'mask' ? gset.product.mask : gset.product.bike) === false) throw apiError_('bad_payload', it.id + ' does not match ' + rows[i][E.obj]);
-          var days = Math.max(1, Math.round(num_(rows[i][E.qty]) || 1));
-          if (gdone.indexOf(id) >= 0) { gearSg.push({ item: it.id, guest: rows[i][E.guest], days: days, back: gearBack_(at, days) }); return; }
-          // The money is never refused: a number the sheet has elsewhere becomes a difference to clear up.
-          if (it.where !== 'in') gearOut.push({ at: at, id: id + '-d', type: 'diff', item: it.id, ref: id, by: me.username, d: { kind: 'rented_while_out', last: it.last } });
+          var days = rows[i][E.qty];
+          if (gdone[id]) { gearSg.push({ item: it.id }); return; }
+          if ((it.where === 'out' || it.where === 'sunset') && !gdone[id + '-r']) {
+            gearOut.push({ at: at, id: id + '-r', type: 'return', item: it.id, ref: it.last ? it.last.guest : '', by: me.username, d: { condition: it.condition, via: 'resold' } });
+          }
           gearOut.push({ at: at, id: id, type: 'out', item: it.id, ref: rows[i][E.guest], back: gearBack_(at, days), by: me.username,
-            d: { kind: 'rental', days: days, saleTs: rows[i][E.ts] } });
-          gearSg.push({ item: it.id, guest: rows[i][E.guest], days: days, back: gearBack_(at, days) });
+            d: { kind: 'rental', days: days, saleTs: ts } });
+          gearSg.push({ item: it.id });
         });
       }
+      if (gearOut.length) needSheets_([SHEETS.gearLog]); // before the money is written
       var ent = entries_(), man = manual_();
       // A line id already in the sheet is either our own earlier attempt (same guest and
       // product: skip it) or a collision with another line (refuse, nothing written).
@@ -1102,8 +1255,7 @@ var UIAPI = (function () {
       appendManual_(man, rows.filter(function (r) { return !man.byTs[r[E.ts]]; }));
       if (gearOut.length || gearSg.length) {
         gearLog_(gearOut);
-        // Also on a retry: the SG sheet is rewritten from what is logged (same values).
-        gearSg.forEach(function (g) { sgUpdate_(g.item, { status: 'Out', guest: g.guest, from: at, days: g.days, back: g.back }); });
+        sgUpdate_(); // also on a retry: the SG sheet is rewritten from what is logged (same values)
       }
       var res = { lines: rows.length };
       if (!shiftRows_().some(function (r) { return r[COL.status] === 'Open'; })) res.warning = 'Recorded while no shift was open';
@@ -1131,6 +1283,7 @@ var UIAPI = (function () {
       if (isExp && p.payment === 'Paid to Partner') throw apiError_('bad_payment', 'Paid to Partner is not used for expenses');
       if (p.qty !== undefined || p.unit !== undefined) {
         var q = p.qty !== undefined ? qty_(p.qty) : (num_(row[E.qty]) || 1);
+        if (p.qty !== undefined && Math.round(q) !== q && isRentalObj_(row[E.obj])) throw apiError_('bad_amount', 'Rental of ' + row[E.obj] + ': the quantity is the number of days, a whole number (1 or more)');
         var unit = p.unit !== undefined ? amount_(p.unit, 'price') : num_(row[E.unit]);
         var total = Math.round(q * unit);
         row[E.qty] = q; row[E.unit] = unit; row[E.total] = total; row[E.real] = total;
@@ -1145,6 +1298,7 @@ var UIAPI = (function () {
       if (p.guest !== undefined) { row[E.guest] = text_(p.guest, 120, 'Guest'); if (!row[E.guest]) throw apiError_('bad_payload', 'Guest is required'); }
       if (p.comment !== undefined && REFUND_MARKS.indexOf(String(row[E.comment])) < 0) row[E.comment] = text_(p.comment, 300, 'Comment');
       var man = manual_();
+      row = row.map(safe_); // values read back lost their protecting apostrophe
       (ent.all[ts] || []).forEach(function (n) {
         verify_(ent.sheet, n, E.ts + 1, ts);
         ent.sheet.getRange(n, E.qty + 1, 1, 4).setValues([[row[E.qty], row[E.unit], row[E.total], row[E.real]]]);
@@ -1188,10 +1342,12 @@ var UIAPI = (function () {
       var pay = payment_(p.payment, false);
       var items = Array.isArray(p.items) ? p.items : [];
       if (!items.length || items.length > 200) throw apiError_('bad_payload', 'Nothing to settle');
+      assertCashRight_(me);
       var author = me.author || me.username;
       var ent = entries_(), man = manual_();
       var todo = [];
       items.forEach(function (it) {
+        if (!it || typeof it !== 'object') throw apiError_('bad_payload', 'Invalid line');
         var oldTs = String(it.oldTs), newTs = lineTs_(it.newTs, at);
         var rowNo = ent.byTs[oldTs];
         if (!rowNo) {
@@ -1216,9 +1372,10 @@ var UIAPI = (function () {
         if (t.mRow) {
           verify_(man.sheet, t.mRow, M.ts + 1, t.oldTs);
           man.sheet.getRange(t.mRow, M.ts + 1).setNumberFormat('@');
-          man.sheet.getRange(t.mRow, M.pay + 1, 1, 4).setValues([[pay, author, man.sheet.getRange(t.mRow, M.comment + 1).getValue(), t.newTs]]);
+          man.sheet.getRange(t.mRow, M.pay + 1, 1, 4).setValues([[pay, author, safe_(man.sheet.getRange(t.mRow, M.comment + 1).getValue()), t.newTs]]);
         }
       });
+      gearRelink_(me, at, todo);
       var done = todo.filter(function (t) { return t.entries; });
       return { settled: done.length, audit: { before: done.map(function (t) { return t.before; }) } };
     },
@@ -1233,6 +1390,7 @@ var UIAPI = (function () {
       var newTs = lineTs_(p.newTs, at);
       var pay = payment_(p.payment, false);
       var amount = amount_(p.amount, 'amount');
+      assertCashRight_(me); // staff refund only during their own open shift
       var origTs = String(p.origTs);
       var ent = entries_(), man = manual_();
       var rowNo = ent.byTs[origTs];
@@ -1276,6 +1434,7 @@ var UIAPI = (function () {
       if (pay === 'Paid to Partner') throw apiError_('bad_payment', 'Paid to Partner is not used for expenses');
       var amount = amount_(p.amount, 'amount');
       if (amount <= 0) throw apiError_('bad_amount', 'Invalid amount');
+      assertCashRight_(me);
       var obj = String(p.object || '').trim();
       var category = expenseCategory_(obj);
       if (!category) throw apiError_('bad_payload', obj + ' is not in Data activities (columns L to O)');
@@ -1522,13 +1681,12 @@ var UIAPI = (function () {
       var warn = mailOnce_(op, 'settle', { to: [author, MAIL.bills, MAIL.alerts], subject: 'BillSettlement (' + objs.join(', ') + ') - Created by ' + author + ' on ' + when,
         body: 'Bill ' + bill + ' paid: ' + out.map(function (x) { return x.object + ' ' + x.net; }).join(', ') + ' (' + pay + ').',
         pdf: billHtml_('BillSettlement', author, when, lines), pdfName: 'Billsettled_' + bill.replace(/[\/:]/g, '-') + '.pdf' });
-      // Every row carrying the bill id becomes Paid in one write per block (the old rows included).
-      var col = ent.sheet.getRange(2, E.status + 1, ent.rows.length, 1);
-      var st = col.getValues(), touched = false;
+      // Every row carrying the bill id becomes Paid (the old rows included); only those cells are written.
       ent.rows.forEach(function (r, i) {
-        if (String(r[E.status] || '').trim() === bill && String(st[i][0]).trim() === bill) { st[i][0] = 'Paid'; touched = true; }
+        if (String(r[E.status] || '').trim() !== bill) return;
+        var cell = ent.sheet.getRange(i + 2, E.status + 1);
+        if (String(cell.getValue()).trim() === bill) cell.setValue('Paid');
       });
-      if (touched) col.setValues(st);
       return { rows: out, warning: warn || undefined };
     },
     /** End-of-day card terminal settlement, as the old Card Trans. → Settlements button. */
@@ -1584,64 +1742,76 @@ var UIAPI = (function () {
     gear_out: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]);
       assertGearDesk_(me);
       var gid = String(p.gid || ''); if (!/^G[\w-]{6,40}$/.test(gid)) throw apiError_('bad_payload', 'Invalid id');
       var st = gearState_(), days = Math.max(1, Math.min(30, Math.round(Number(p.days) || 1)));
       var guest = text_(p.guest || 'Volunteer', 120, 'Guest');
-      var items = (Array.isArray(p.items) ? p.items : []).map(function (id) { return gearItem_(st, id); });
-      if (!items.length) throw apiError_('bad_payload', 'Pick at least one number');
-      var back = gearBack_(at, days), done = gearLogRows_().map(function (e) { return e.id; });
-      var rows = [];
-      items.forEach(function (it) {
+      var list = Array.isArray(p.items) ? p.items : [];
+      if (!list.length) throw apiError_('bad_payload', 'Pick at least one number');
+      var back = gearBack_(at, days), done = {}, rows = [], skipped = [], seen = {};
+      gearLogRows_().forEach(function (e) { done[e.id] = 1; });
+      // An unknown, unavailable or already out number is skipped; the others go out.
+      list.forEach(function (x) {
+        var it = findGear_(st, x);
+        if (!it || seen[it.id]) { skipped.push(String(x || '').slice(0, 20)); return; }
+        seen[it.id] = 1;
         var id = gid + '-' + it.id;
-        if (done.indexOf(id) >= 0) return;
-        if (it.where !== 'in' || it.condition !== 'OK') throw apiError_('gear_unavailable', it.id + ' is not available');
+        if (done[id]) return;
+        if (it.where !== 'in' || it.condition !== 'OK') { skipped.push(it.id); return; }
         rows.push({ at: at, id: id, type: 'out', item: it.id, ref: guest, back: back, by: me.username, d: { kind: 'volunteer', days: days } });
       });
       gearLog_(rows);
-      items.forEach(function (it) { sgUpdate_(it.id, { status: 'Out', guest: guest, from: at, days: 0, back: back }); });
-      return { back: back.toISOString() };
+      sgUpdate_();
+      var res = { back: back.toISOString(), out: rows.length };
+      if (skipped.length) res.skipped = skipped;
+      return res;
     },
     /** Return at the desk: condition per number, optional late extension charged Unpaid to the guest. */
     gear_return: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]); // checked before any write (a charge is written before the log)
       if (me.role === 'gear') return gearStaffReturn_(op, me, p, at);
       assertGearDesk_(me);
       var gid = String(p.gid || ''); if (!/^G[\w-]{6,40}$/.test(gid)) throw apiError_('bad_payload', 'Invalid id');
-      var st = gearState_(), done = gearLogRows_().map(function (e) { return e.id; }), set = gearSettings_();
-      var rows = [], charges = [], sgDone = [];
+      var st = gearState_(), done = {}, set = gearSettings_();
+      gearLogRows_().forEach(function (e) { done[e.id] = 1; });
+      var rows = [], charges = [], skipped = [], warn = [], seen = {}, already = false;
       (Array.isArray(p.items) ? p.items : []).forEach(function (x) {
-        var it = gearItem_(st, x.item), id = gid + '-' + it.id;
+        var it = findGear_(st, x && x.item);
+        if (!it || seen[it.id]) { skipped.push(String(x && x.item || '').slice(0, 20)); return; }
+        seen[it.id] = 1;
+        var id = gid + '-' + it.id;
         var cond = GEAR_CONDITIONS.indexOf(x.condition) >= 0 ? x.condition : 'OK';
-        if (done.indexOf(id) >= 0) { sgDone.push({ item: it.id, cond: cond }); return; }
-        if (it.where !== 'out' && it.where !== 'sunset') throw apiError_('gear_not_out', it.id + ' is not recorded as out');
+        if (done[id]) { already = true; return; }
+        if (it.where !== 'out' && it.where !== 'sunset') { skipped.push(it.id); return; } // already back: ignored, the others go on
         var guest = it.last ? it.last.guest : '';
         rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond } });
         if (cond !== 'OK') rows.push({ at: at, id: 'D' + id, type: 'damage', item: it.id, ref: guest, by: me.username, d: { condition: cond, from: 'return', note: gnote_(x.note) } });
-        if (x.ext && it.last && it.last.kind === 'rental') {
-          var unit = it.kind === 'mask' ? set.ext.mask : set.ext.bike;
-          if (unit) charges.push({ ts: x.ext.ts, object: it.kind === 'mask' ? set.product.mask : set.product.bike, qty: Math.max(1, Math.round(Number(x.ext.days) || 1)), unit: unit,
-            guest: guest, comment: 'Extension ' + it.id });
-        }
+        var ch = extCharge_(st, set, it, guest, x.ext, at.getTime(), warn);
+        if (ch) charges.push(ch);
       });
-      sgDone.forEach(function (x) { sgUpdate_(x.item, { status: x.cond }); });
-      if (!rows.length) return { already: true };
+      sgUpdate_();
+      var res = skipped.length ? { skipped: skipped } : {};
+      if (!rows.length) { res.returned = 0; if (already) res.already = true; return res; }
       gearCharge_(me, at, charges);
       gearLog_(rows);
-      rows.forEach(function (r) { if (r.type === 'return') sgUpdate_(r.item, { status: r.d.condition }); });
-      return { returned: rows.filter(function (r) { return r.type === 'return'; }).length, charged: charges.length };
+      res.returned = rows.filter(function (r) { return r.type === 'return'; }).length; res.charged = charges.length;
+      if (warn.length) res.warning = warn.join(' ');
+      return res;
     },
     /** Gear staff: numbers that leave on the Sunset Boat (due back 21:30). */
     sunset_out: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]);
       var trip = String(p.trip || ''); if (!/^T[\w-]{6,40}$/.test(trip)) throw apiError_('bad_payload', 'Invalid trip');
       if (gearEventDone_(trip + '-out')) return { already: true };
       var st = gearState_();
       var picked = {}, items = [];
-      (Array.isArray(p.items) ? p.items : []).forEach(function (id) { var it = gearItem_(st, id); if (!picked[it.id]) { picked[it.id] = 1; items.push(it); } });
-      if (!items.length) throw apiError_('bad_payload', 'Pick at least one number');
+      (Array.isArray(p.items) ? p.items : []).forEach(function (id) { var it = findGear_(st, id); if (it && !picked[it.id]) { picked[it.id] = 1; items.push(it); } });
+      if (!(Array.isArray(p.items) && p.items.length)) throw apiError_('bad_payload', 'Pick at least one number');
       var back = sunsetBack_(at), rows = [];
       // A number the desk still has as out was really in the box: a difference to clear up; it
       // keeps its rental (guest, late extension) and is not counted on the boat.
@@ -1649,18 +1819,22 @@ var UIAPI = (function () {
         if (it.where === 'out' || it.where === 'sunset') { rows.push({ at: at, id: trip + '-d-' + it.id, type: 'diff', item: it.id, ref: trip, by: me.username, d: { kind: 'counted_but_out', last: it.last } }); return false; }
         return it.where === 'in';
       });
+      // No number really leaves: nothing is written (no empty trip, no difference).
+      if (!go.length) return { items: [], info: 'No number left on the boat: all were already recorded as out' };
       rows.unshift({ at: at, id: trip + '-out', type: 'sunset_out', item: '', ref: trip, back: back, by: me.username, d: { items: go.map(function (i) { return i.id; }) } });
       gearLog_(rows);
-      go.forEach(function (it) { sgUpdate_(it.id, { status: 'Out', guest: 'Sunset Boat', from: at, days: 0, back: back }); });
-      return { back: back.toISOString() };
+      sgUpdate_();
+      return { back: back.toISOString(), items: go.map(function (i) { return i.id; }) };
     },
     /** Gear staff: numbers back from the Sunset Boat; the others become differences. */
     sunset_back: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]);
       var trip = String(p.trip || ''); if (!/^T[\w-]{6,40}$/.test(trip)) throw apiError_('bad_payload', 'Invalid trip');
       if (gearEventDone_(trip + '-back')) return { already: true };
       var st = gearState_(), t = st.trips.filter(function (x) { return x.trip === trip; })[0];
+      if (!t && loggedOp_('sunset_out', trip)) return { already: true, info: 'No number had left on this trip: nothing to record' };
       if (!t) throw apiError_('line_not_found', 'Unknown Sunset Boat trip');
       var back = (Array.isArray(p.items) ? p.items : []).map(function (id) { return String(id).toUpperCase(); }).filter(function (id) { return t.items.indexOf(id) >= 0; });
       var where = {}; st.items.forEach(function (i) { where[i.id] = i.where; });
@@ -1684,11 +1858,13 @@ var UIAPI = (function () {
     gear_count: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]);
       var cid = String(p.cid || ''); if (!/^K[\w-]{6,40}$/.test(cid)) throw apiError_('bad_payload', 'Invalid id');
       if (gearEventDone_(cid)) return { already: true };
       var st = gearState_(), seen = {}, notes = {};
       (Array.isArray(p.items) ? p.items : []).forEach(function (x) {
-        var it = gearItem_(st, x.item);
+        var it = findGear_(st, x && x.item);
+        if (!it) return; // retired since the phone's last pull: the rest of the check counts
         seen[it.id] = GEAR_CONDITIONS.indexOf(x.condition) >= 0 ? x.condition : 'OK';
         notes[it.id] = gnote_(x.note);
       });
@@ -1709,6 +1885,7 @@ var UIAPI = (function () {
         }
       });
       gearLog_(rows);
+      if (rows.some(function (r) { return r.type === 'damage'; })) sgUpdate_(); // a number found Lost leaves the stock
       return { differences: rows.filter(function (r) { return r.type === 'diff'; }).length };
     },
     /**
@@ -1719,25 +1896,25 @@ var UIAPI = (function () {
     gear_confirm: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]); // checked before any write (a charge is written before the log)
       var cfid = String(p.cfid || ''); if (!/^F[\w-]{6,40}$/.test(cfid)) throw apiError_('bad_payload', 'Invalid id');
       if (gearEventDone_(cfid)) return { already: true };
       var side = me.role === 'gear' ? 'gear' : 'reception';
       if (side === 'reception') assertCashRight_(me);
       var st = gearState_(), df = st.diffs.filter(function (d) { return d.id === String(p.diff); })[0];
       if (!df) throw apiError_('line_not_found', 'This difference is already closed');
-      var rows = [], charges = [];
+      var rows = [], charges = [], warn = [];
       if (side === 'reception' && df.kind === 'counted_but_out') {
         var it = gearItem_(st, df.item);
         if (it.where === 'out' || it.where === 'sunset') {
           rows.push({ at: at, id: cfid + '-r', type: 'return', item: it.id, ref: it.last ? it.last.guest : '', by: me.username, d: { condition: it.condition, via: p.action } });
-          if (p.action === 'returned' && p.ext && it.last && it.last.kind === 'rental') {
-            var set = gearSettings_();
-            var eu = it.kind === 'mask' ? set.ext.mask : set.ext.bike;
-            if (eu) charges.push({ ts: p.ext.ts, object: it.kind === 'mask' ? set.product.mask : set.product.bike, qty: Math.max(1, Math.round(Number(p.ext.days) || 1)), unit: eu, guest: it.last.guest, comment: 'Extension ' + it.id });
+          if (p.action === 'returned' && p.ext) {
+            var ch = extCharge_(st, gearSettings_(), it, it.last ? it.last.guest : '', p.ext, at.getTime(), warn);
+            if (ch) charges.push(ch);
           }
         }
       }
-      if (df.kind === 'returned_late' && side === 'reception' && p.action === 'returned' && p.ext && df.last) {
+      if (df.kind === 'returned_late' && side === 'reception' && p.action === 'returned' && p.ext && df.last && df.late > 0) {
         var lset = gearSettings_(), lit = gearItem_(st, df.item), lunit = lit.kind === 'mask' ? lset.ext.mask : lset.ext.bike;
         if (lunit) charges.push({ ts: p.ext.ts, object: lit.kind === 'mask' ? lset.product.mask : lset.product.bike, qty: Math.max(1, Math.round(Number(df.late) || 1)), unit: lunit, guest: df.last.guest, comment: 'Extension ' + lit.id });
       }
@@ -1749,18 +1926,20 @@ var UIAPI = (function () {
       gearCharge_(me, at, charges);
       gearLog_(rows);
       if (rows[0].type === 'return') sgUpdate_(df.item, { status: rows[0].d.condition });
-      return { side: side };
+      return warn.length ? { side: side, warning: warn.join(' ') } : { side: side };
     },
     /** Reception: a missing item is given up as lost; the loss goes to the damage decisions. */
     gear_lost: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]);
       assertGearDesk_(me);
       var lid = String(p.lid || ''); if (!/^L[\w-]{6,40}$/.test(lid)) throw apiError_('bad_payload', 'Invalid id');
       if (gearEventDone_(lid)) return { already: true };
       var st = gearState_(), df = st.diffs.filter(function (d) { return d.id === String(p.diff); })[0];
       if (!df) throw apiError_('line_not_found', 'This difference is already closed');
       if (df.kind === 'counted_but_out' || df.kind === 'rented_while_out' || df.kind === 'returned_late' || df.kind === 'returned_not_out') throw apiError_('bad_payload', df.item + ' was seen: it cannot be marked lost');
+      if (df.kind === 'sale_unlinked') throw apiError_('bad_payload', 'A sale not linked to a number is checked, not marked lost');
       assertCashRight_(me);
       var guest = df.last ? df.last.guest : '';
       gearLog_([{ at: at, id: lid, type: 'lost', item: df.item, ref: df.id, by: me.username, d: {} },
@@ -1772,6 +1951,7 @@ var UIAPI = (function () {
     gear_decide: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]); // checked before any write (a charge is written before the log)
       assertGearDesk_(me);
       var did = String(p.did || ''); if (!/^E[\w-]{6,40}$/.test(did)) throw apiError_('bad_payload', 'Invalid id');
       if (gearEventDone_(did)) return { already: true };
@@ -1794,6 +1974,7 @@ var UIAPI = (function () {
     gear_service: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]);
       assertGearDesk_(me);
       var sid = String(p.sid || ''); if (!/^R[\w-]{6,40}$/.test(sid)) throw apiError_('bad_payload', 'Invalid id');
       if (gearEventDone_(sid)) return { already: true };
@@ -1842,9 +2023,9 @@ var UIAPI = (function () {
       var already = cashRows.some(function (r) { return String(r[0]).indexOf(tag) >= 0; });
       if (!already) {
         appendAfterData_(cash, [dateOnly_(at), fmt_(at, 'HH:mm:ss'), '', diff, counted, '', author,
-          (String(p.comment || '') + ' ' + tag).trim(), 'Opening'], [1]);
+          safe_((String(p.comment || '') + ' ' + tag).trim()), 'Opening'], [1]);
       }
-      shifts.appendRow([String(p.shiftId), me.username, author, at, counted, diff, '', '', '', '', 'Open', '', String(p.comment || '')]);
+      shifts.appendRow([text_(p.shiftId), me.username, author, at, counted, diff, '', '', '', '', 'Open', '', text_(p.comment, 300, 'Comment')]);
       return { shiftId: p.shiftId, difference: diff };
     },
     shift_close: function (op, me) {
@@ -1852,7 +2033,9 @@ var UIAPI = (function () {
       var at = parseAt_(op.at);
       var counted = amount_(p.cashCounted, 'cashCounted');
       var cashout = amount_(p.cashout === undefined ? 0 : p.cashout, 'cashout');
-      var expected = amount_(p.expectedCash, 'expectedCash');
+      // The screen's expected cash can be negative (more paid out than in): accepted, the email tells.
+      var expected = Math.round(Number(p.expectedCash));
+      if (!isFinite(expected)) throw apiError_('bad_amount', 'Invalid amount for expectedCash');
       var rows = shiftRows_();
       var idx = -1;
       rows.forEach(function (r, i) { if (String(r[COL.id]) === String(p.shiftId)) idx = i; });
@@ -1886,7 +2069,7 @@ var UIAPI = (function () {
       var cashRows = cash.getLastRow() >= 2 ? cash.getRange(2, 8, cash.getLastRow() - 1, 2).getValues() : [];
       if (!cashRows.some(function (r) { return String(r[0]).indexOf(tag) >= 0 && r[1] === 'Closing'; })) {
         appendAfterData_(cash, [dateOnly_(at), fmt_(at, 'HH:mm:ss'), cashout, diff, counted, '', author,
-          (String(p.comment || '') + ' ' + tag).trim(), 'Closing'], [1]);
+          safe_((String(p.comment || '') + ' ' + tag).trim()), 'Closing'], [1]);
       }
       // Same Cash-out line as the old Close Shift dialog (A date, B type, L amount, O author, Q timestamp).
       var mLast = lastRowIn_(manual, 1, 3);
@@ -1900,15 +2083,32 @@ var UIAPI = (function () {
         manual.getRange(r, 1, 1, 17).setValues([line]);
         manual.getRange(r, 1).setNumberFormat('dd/MM/yyyy');
       }
+      // Cash difference or phantom cash still open: the manager and the owner are told (never blocks the close).
+      var open = cashRows_().filter(function (c) { return c.type === 'Phantom'; });
+      var warn = '';
+      if (diff !== 0 || open.length) {
+        warn = mailOnce_(op, 'close', { to: ALERT_TO.concat([MAIL.alerts]), subject: 'Shift closed with ' + (diff !== 0 ? 'a cash difference of ' + diff : 'open phantom cash') + ' — ' + author,
+          body: 'Shift ' + p.shiftId + ' of ' + rec[COL.user] + ' (' + author + ') closed by ' + me.username + ' at ' + fmt_(at, 'dd/MM/yyyy HH:mm') + '.\n\n' +
+            'Expected cash (sheet): ' + sheetExpected + '\nExpected on the screen: ' + expected + '\nCounted: ' + counted + '\nCash-out: ' + cashout +
+            '\nDifference (counted + cash-out - expected): ' + diff + '\n\nPhantom cash not solved: ' + (open.length ? '\n' + open.map(function (c) {
+              return '- ' + (c.ts ? c.ts.slice(6, 8) + '/' + c.ts.slice(4, 6) + ' ' + c.ts.slice(8, 10) + ':' + c.ts.slice(10, 12) : '') + ' ' + c.diff + ' by ' + c.author + (c.comment ? ': ' + c.comment : '');
+            }).join('\n') : 'none') + (p.comment ? '\n\nComment: ' + String(p.comment).slice(0, 300) : '') });
+      }
       // UI_Shifts last: it is the "done" marker. {opId} lets a retry recognise its own close.
       var note = expected !== sheetExpected ? 'screen expected ' + expected + ', sheet ' + sheetExpected : '';
       var comment = [rec[COL.comment], String(p.comment || ''), note, '{' + op.id + '}'].filter(String).join(' | ');
-      shifts.getRange(idx + 2, COL.closedAt + 1, 1, 7).setValues([[at, counted, cashout, diff, 'Closed', me.username, comment]]);
-      return { shiftId: p.shiftId, difference: diff, expected: sheetExpected };
+      shifts.getRange(idx + 2, COL.closedAt + 1, 1, 7).setValues([[at, counted, cashout, diff, 'Closed', me.username, text_(comment)]]);
+      var res = { shiftId: p.shiftId, difference: diff, expected: sheetExpected };
+      if (warn) res.warning = warn;
+      return res;
     }
   };
 
+  var PUSH_BUDGET_MS = 18000; // stop cleanly well before the Apps Script / client timeouts
+  // Bugs on bad data (a field of the wrong type): the op is refused, the queue goes on.
+  var DATA_ERRORS = ['TypeError', 'RangeError', 'SyntaxError'];
   function push(body) {
+    var t0 = Date.now();
     var sess = session_(body.token);
     var sessionUser = auth_(sess);
     var ops = Array.isArray(body.ops) ? body.ops.slice(0, 100) : [];
@@ -1922,9 +2122,14 @@ var UIAPI = (function () {
       }
       var results = [];
       for (var k = 0; k < ops.length; k++) {
+        if (k > 0 && Date.now() - t0 > PUSH_BUDGET_MS) { // the rest is sent again by the device
+          SpreadsheetApp.flush();
+          return { results: results, shift: shiftState_(), partial: true, budget: true };
+        }
         var op = ops[k];
         var id = String(op && op.id || '');
         if (!id) { results.push({ id: id, status: 'rejected', error: 'bad_op', message: 'Operation without id' }); continue; }
+        if (/^[=+@]/.test(id)) { results.push({ id: id, status: 'rejected', error: 'bad_op', message: 'Invalid operation id' }); continue; }
         if (seen[id]) {
           // Same answer as the first time, so a lost response never hides a refusal.
           var first = seen[id];
@@ -1941,27 +2146,36 @@ var UIAPI = (function () {
           if (a.user.role !== 'gear' && (op.type === 'sunset_out' || op.type === 'sunset_back' || op.type === 'gear_count')) throw apiError_('forbidden', 'Done by the gear staff in their app');
           var h = HANDLERS[op.type];
           if (!h) throw apiError_('unknown_type', 'Unknown operation ' + op.type);
+          writes_ = 0;
           res = h(op, a.user) || {};
           if (gearDirty_) { gearDirty_ = false; try { sgSync_(); } catch (e) { /* only the mirror: redone by the next gear operation */ } }
           status = 'applied';
           if (res.audit || res.warning) detail = JSON.stringify({ warning: res.warning, audit: res.audit }).slice(0, 20000);
           delete res.audit;
         } catch (e) {
-          // Not a business refusal (Google timeout, quota...): stop here, do not mark
+          gearDirty_ = false;
+          var code = e.apiCode;
+          // Part of it is already in the sheet (money written, then a tab missing): never refused,
+          // retried until it goes through (shown as "not going through" on the device).
+          if (writes_ > 0 && (code === 'missing_sheet' || (!code && DATA_ERRORS.indexOf(e.name) >= 0))) code = null;
+          else if (!code && DATA_ERRORS.indexOf(e.name) >= 0) { console.error(e); code = 'bad_payload'; e = apiError_(code, 'Invalid operation data (' + e.message + ')'); }
+          else if (code === 'missing_sheet') e = apiError_(code, e.message + ' — ask a manager to check the spreadsheet; enter this operation again afterwards');
+          // Not a business refusal (Google timeout, quota, lock...): stop here, do not mark
           // as seen, report what was done so far; the device retries the rest later.
-          if (!e.apiCode || e.apiCode === 'missing_sheet') {
+          if (!code) {
             console.error(e);
             SpreadsheetApp.flush();
-            return { results: results, shift: shiftState_(), partial: true };
+            return { results: results, shift: shiftState_(), partial: true, message: e.apiCode === 'missing_sheet' ? e.message + ' — ask a manager to check the spreadsheet' : undefined };
           }
           status = 'rejected';
-          detail = e.apiCode + ': ' + e.message;
-          res = { error: e.apiCode, message: e.message };
+          detail = code + ': ' + e.message;
+          res = { error: code, message: e.message };
         }
         var vBefore = version_();
-        log.appendRow([new Date(), id, String(body.deviceId || ''), who, String(op.type),
-          String(op.payload && (op.payload.shiftId || op.payload.saleId || op.payload.ts || op.payload.origTs || op.payload.pid || op.payload.bill || op.payload.cid || op.payload.gid || op.payload.trip || op.payload.cfid || op.payload.did || op.payload.lid || op.payload.sid) || ''), String(op.at || ''), status, detail,
-          JSON.stringify(op.payload || {}).slice(0, 45000)]);
+        var pl = op.payload && typeof op.payload === 'object' ? op.payload : {};
+        log.appendRow([new Date(), id, text_(body.deviceId, 0), text_(who, 0), text_(op.type, 0),
+          text_(pl.shiftId || pl.saleId || pl.ts || pl.origTs || pl.pid || pl.bill || pl.cid || pl.gid || pl.trip || pl.cfid || pl.did || pl.lid || pl.sid || '', 0), text_(op.at, 0), status, safe_(detail),
+          safe_(JSON.stringify(op.payload || {}).slice(0, 45000))]);
         var props_ = PropertiesService.getScriptProperties();
         props_.setProperty('UI_V', String(vBefore + 1));
         MAIL_KINDS.forEach(function (k) { if (props_.getProperty('UI_MAIL_' + id + '_' + k)) props_.deleteProperty('UI_MAIL_' + id + '_' + k); });
@@ -1975,10 +2189,14 @@ var UIAPI = (function () {
     });
   }
 
+  /** Is the sheet reachable right now (closing a shift needs the Internet)? No lock, no session. */
+  function ping() { return { serverTime: new Date().toISOString() }; }
+
   function handle(e) {
+    soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;
@@ -1989,7 +2207,27 @@ var UIAPI = (function () {
     }
   }
 
-  return { handle: handle, setup: setup, _hash: hashPassword_ };
+  /**
+   * Run daily at 21:30 (WITA) by the trigger UI_setup installs: if today's evening check is
+   * not in Gear_Log, the manager, the owner and the alerts address get one email (once a day).
+   */
+  function eveningCheck() {
+    if (!ss_().getSheetByName(SHEETS.sg) || !ss_().getSheetByName(SHEETS.gearLog)) return 'no gear sheets';
+    var st = gearState_();
+    if (st.countedToday) return 'done';
+    var props = PropertiesService.getScriptProperties(), key = 'UI_COUNTMAIL_' + gfmt_(new Date(), 'yyyy-MM-dd');
+    if (props.getProperty(key)) return 'already sent';
+    var last = st.lastCount ? gfmt_(new Date(st.lastCount.at), 'dd/MM/yyyy HH:mm') + ' by ' + st.lastCount.by : 'never';
+    var out = st.items.filter(function (i) { return i.where === 'out' || i.where === 'sunset'; }).length;
+    MailApp.sendEmail({ to: ALERT_TO.concat([MAIL.alerts]).join(', '), subject: 'Rabbit Tree: gear evening check not done today (' + gfmt_(new Date(), 'dd/MM/yyyy') + ')',
+      body: 'The gear staff did not send the evening check of masks and bikes today (checked at ' + gfmt_(new Date(), 'HH:mm') + ').\n\n' +
+        'Last check: ' + last + '.\nNumbers recorded out now: ' + out + '.\n\nWithout the check no late extension can be charged for tonight. ' +
+        'Please ask the gear staff to do it in their app (it can still be sent late).\n\nThis is an automated email.' });
+    props.setProperty(key, new Date().toISOString());
+    return 'sent';
+  }
+
+  return { handle: handle, setup: setup, eveningCheck: eveningCheck, _hash: hashPassword_ };
 })();
 
 function doPost(e) { return UIAPI.handle(e); }
@@ -1997,5 +2235,7 @@ function doGet() {
   return ContentService.createTextOutput(JSON.stringify({ ok: true, service: 'reception-ui' }))
     .setMimeType(ContentService.MimeType.JSON);
 }
-/** Run once from the editor: creates UI_Users, UI_Log and UI_Shifts. */
-function UI_setup() { Logger.log(UIAPI.setup()); }
+/** Run once from the editor: creates UI_Users, UI_Log and UI_Shifts, installs the 21:30 check reminder. */
+function UI_setup() { var r = UIAPI.setup(); Logger.log(r); return r; }
+/** Daily trigger (21:30 WITA): emails if the gear evening check is not done. */
+function UI_eveningCheck() { var r = UIAPI.eveningCheck(); Logger.log(r); return r; }

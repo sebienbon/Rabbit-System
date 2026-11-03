@@ -1,8 +1,9 @@
 // Gear staff app (Bahasa Indonesia): Sunset Boat out and back, the blind evening check,
 // and the differences to solve with the reception. Runs on a phone, with its own local
 // database (window.RABBIT_DB), and works offline: everything waits in the outbox.
-import { login, logout, currentUser } from './auth.js';
-import { onStatus, startSync, enqueue, pullNow, pushNow } from './sync.js';
+import { login, logout, currentUser, outboxOwners, cleanupTokens } from './auth.js';
+import { onStatus, startSync, enqueue, pullNow, pushNow, waitingCount, dismissRejected, warnOtherOutboxes, opDetails, copyText, status as syncStatus, CLOCK_WARN_MS } from './sync.js';
+import { db } from './db.js';
 import { CONFIG } from './config.js';
 import { gearView, checkDue, notifyOnce, fmtWhen } from './gearcore.js';
 
@@ -23,7 +24,11 @@ const DIFF = {
   rented_while_out: 'disewa di resepsi, tapi tercatat di tempat lain',
   returned_late: 'dikembalikan terlambat — resepsionis memutuskan biaya',
   returned_not_out: 'dikembalikan, tapi tidak tercatat keluar',
+  sale_unlinked: 'dijual di resepsi, tapi nomornya tidak bisa dicatat — cek bersama',
 };
+const OP = { sunset_out: 'Sunset Boat berangkat', sunset_back: 'Sunset Boat kembali', gear_count: 'Cek malam', gear_return: 'Pengembalian', gear_confirm: 'Konfirmasi selisih',
+  gear_out: 'Volunteer', gear_lost: 'Hilang', gear_decide: 'Keputusan kerusakan', gear_service: 'Perbaikan' };
+const WHY = { gear_not_out: 'nomor ini tidak tercatat keluar', gear_unavailable: 'nomor ini tidak tersedia', line_not_found: 'sudah selesai atau tidak ada lagi di sheet', forbidden: 'tidak diizinkan untuk akun ini', bad_payload: 'data tidak valid' };
 const lastUse = l => !l ? 'Belum pernah dipakai' : l.kind === 'sunset' ? `Sunset Boat, ${dayText(l.from)}`
   : `${l.kind === 'volunteer' ? 'Volunteer' : 'sewa'}, ${l.guest}, ${dayText(l.from)}${l.returned ? ' → kembali ' + dayText(l.returned) + ' ' + hhmm(l.returned) : ''}`;
 const waLink = (num, text) => `https://wa.me/${String(num || '').replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
@@ -41,23 +46,37 @@ function renderStrip(s) {
   else if (s.state === 'sending' || n) { tone = 'busy'; title = 'Mengirim'; detail = `${n} catatan.`; }
   else { title = 'Terhubung'; detail = 'Semua sudah terkirim.'; }
   el.dataset.tone = tone;
-  el.innerHTML = `<span class="dot" aria-hidden="true"></span><strong>${esc(title)}</strong><span class="detail">${esc(detail)}</span>` +
+  const attn = s.rejected + (s.stuck ? 1 : 0);
+  const skew = Math.abs(s.clockSkew || 0) > CLOCK_WARN_MS ? `<span class="detail warnline clockwarn">Jam HP ini selisih ${Math.round(Math.abs(s.clockSkew) / 60000)} menit dari sheet: perbaiki tanggal dan jam HP.</span>` : '';
+  el.innerHTML = `<span class="dot" aria-hidden="true"></span><strong>${esc(title)}</strong><span class="detail">${esc(detail)}</span>${skew}` +
+    (attn && ui.user ? `<button type="button" class="ghost small attn" data-go="home">${attn} perlu perhatian</button>` : '') +
     (s.state === 'expired' && ui.user ? '<button type="button" class="ghost small" id="relog">Masuk lagi</button>' : '');
   const r = el.querySelector('#relog');
   if (r) r.onclick = async () => { await logout(ui.user); ui.user = null; ui.notice = 'Ketik kata sandi: catatan yang menunggu akan dikirim.'; render(); };
 }
 
 // ---------- login ----------
-function renderLogin() {
+async function renderLogin() {
   $('#who').innerHTML = '';
+  // Phones are swapped between staff, but never with notes waiting: only their author can log in.
+  const owner = (await outboxOwners())[0] || null, n = owner ? await waitingCount() : 0;
+  // Redrawn by a sync in the background: what is being typed stays (and the cursor).
+  const was = $('#lf') ? { u: $('#u').value, p: $('#p').value, le: $('#le').textContent, focus: document.activeElement && document.activeElement.id } : null;
   main().innerHTML = `<form class="card login" id="lf" novalidate>
     <h1>Masuk</h1>
     <p class="error" id="le" role="alert">${esc(ui.notice)}</p>
-    <label class="field"><span>Nama pengguna</span><input id="u" autocomplete="username" autocapitalize="none" autofocus></label>
+    ${owner ? `<p class="phwarn waitowner">${n} catatan dari ${esc(owner)} masih menunggu dikirim: hanya ${esc(owner)} yang bisa masuk sampai terkirim.</p>` : ''}
+    <label class="field"><span>Nama pengguna</span><input id="u" autocomplete="username" autocapitalize="none" ${owner ? `value="${esc(owner)}" readonly` : 'autofocus'}></label>
     <label class="field"><span>Kata sandi</span><input id="p" type="password" autocomplete="current-password"></label>
     <button class="primary wide" type="submit">Masuk</button>
     <p class="muted small">Perlu internet untuk masuk pertama kali.</p>
   </form>`;
+  if (was) {
+    if (!owner) $('#u').value = was.u;
+    if (!ui.notice) $('#le').textContent = was.le;
+    if (!owner || was.u.trim().toLowerCase() === owner) $('#p').value = was.p;
+    if (was.focus === 'u' || was.focus === 'p') $('#' + was.focus).focus();
+  }
   $('#lf').addEventListener('submit', async e => {
     e.preventDefault();
     const u = $('#u').value, p = $('#p').value, b = $('#lf button');
@@ -111,6 +130,22 @@ function reviewList(g, c, what) {
 }
 const checkNotes = c => Object.keys(c.items).find(id => c.items[id] === 'Other' && !String(c.notes[id] || '').trim());
 const itemsOf = c => Object.keys(c.items).map(id => ({ item: id, condition: c.items[id], note: String(c.notes[id] || '').trim() }));
+
+// Refused by the sheet (kept until dismissed), and an operation the sheet keeps failing on.
+function attention(rejected) {
+  const stuck = syncStatus.stuck;
+  if (!rejected.length && !stuck) return '';
+  const what = r => (r.payload && Array.isArray(r.payload.items) ? r.payload.items.map(x => (typeof x === 'string' ? x : x.item)).join(', ') : '');
+  const row = (r, why, dismiss) => `<div class="card gadiff bad"><b>${esc(OP[r.type] || r.type)} · ${esc(dayText(r.at))} ${esc(hhmm(r.at))}</b>
+      ${what(r) ? `<span class="small">${esc(what(r))}</span>` : ''}<span class="small warnline">${esc(why)}</span>
+      <div class="garow"><button type="button" class="ghost" data-copyop="${esc(r.id)}">Salin detail</button>${dismiss ? `<button type="button" class="ghost" data-dismiss="${esc(r.id)}">Tutup</button>` : ''}</div></div>`;
+  ui.listed = new Map([...rejected.map(r => [r.id, r]), ...(stuck ? [[stuck.id, stuck]] : [])]);
+  return `<section class="gaattn" id="attention">
+    ${stuck ? `<h2>Belum bisa terkirim</h2><p class="muted small">Sheet gagal ${stuck.tries} kali berturut-turut. Tetap disimpan dan dicoba lagi. Beri tahu manajer.</p>${row(stuck, stuck.message || '', false)}` : ''}
+    ${rejected.length ? `<h2>Ditolak oleh sheet</h2><p class="muted small">Tersimpan di HP ini, tapi sheet tidak menerimanya. Beri tahu manajer, lalu tutup.</p>
+      ${rejected.map(r => row(r, [WHY[r.error], r.message || r.error].filter(Boolean).join(' — '), true)).join('')}` : ''}
+  </section>`;
+}
 
 function home(g) {
   const open = g.trips.find(t => !t.closed);
@@ -232,10 +267,12 @@ async function renderNow() {
   $('#who').innerHTML = `<span>${esc(ui.user.name)}</span>`;
   const g = await gearView('gear');
   if (!g) { main().innerHTML = '<section class="card"><p class="muted">Daftar barang (sheet SG) datang saat terhubung ke internet.</p></section>'; return; }
-  if (checkDue(g)) notifyOnce('gearcheck', 'Cek malam', 'Masker dan sepeda belum dicek hari ini.');
-  if (g.diffs.length) notifyOnce('geardiff:' + g.diffs.length, 'Selisih gear', `${g.diffs.length} selisih perlu dicek bersama resepsionis.`);
+  if (checkDue(g)) notifyOnce('gearcheck', 'Cek malam', 'Masker dan sepeda belum dicek hari ini.', './gear.html');
+  if (g.diffs.length) notifyOnce('geardiff:' + g.diffs.length, 'Selisih gear', `${g.diffs.length} selisih perlu dicek bersama resepsionis.`, './gear.html');
   const s = ui.screen;
+  const rejected = s === 'home' ? await db.all('rejected') : [];
   main().innerHTML = (ui.notice ? `<div class="notice" role="status">${esc(ui.notice)}</div>` : '') +
+    (s === 'home' ? attention(rejected) : '') +
     (s === 'sunset' ? sunset(g) : s === 'count' ? count(g) : s === 'ret' ? ret(g) : s === 'diffs' ? diffs(g) : home(g)) +
     (s === 'home' ? '<p class="center"><button type="button" class="ghost small" data-logout>Keluar</button></p>' : '');
   ui.notice = '';
@@ -248,7 +285,20 @@ document.addEventListener('click', async e => {
   const ds = b.dataset, g = ui.g;
   if (ds.go) { ui.screen = ds.go; ui.sel = new Set(); ui.sure = false; ui.count = null; render(); scrollTo(0, 0); return; }
   if (ds.notify !== undefined) { try { await Notification.requestPermission(); } catch { /* unsupported */ } render(); return; }
-  if (ds.logout !== undefined) { await pushNow(); await logout(ui.user); ui.user = null; render(); return; }
+  if (ds.logout !== undefined) {
+    b.disabled = true;
+    await pushNow();
+    // The phones are swapped between staff: never leave with notes only on this phone.
+    const n = await waitingCount();
+    if (n) { ui.notice = `${n} catatan masih menunggu dikirim — sambungkan ke internet dulu, lalu keluar. (${n} operation${n === 1 ? '' : 's'} still waiting to be sent — connect to the internet first.)`; render(); return; }
+    await logout(ui.user); ui.user = null; render(); return;
+  }
+  if (ds.dismiss) { await dismissRejected(ds.dismiss); render(); return; }
+  if (ds.copyop) {
+    const r = ui.listed && ui.listed.get(ds.copyop); if (!r) return;
+    if (await copyText(opDetails(r, OP[r.type] || r.type), b)) { b.textContent = 'Tersalin'; setTimeout(() => { b.textContent = 'Salin detail'; }, 2000); }
+    return;
+  }
   if (ds.cell) {
     const id = ds.cell;
     ui.sure = false;
@@ -332,9 +382,12 @@ async function boot() {
   });
   ui.user = await currentUser();
   if (ui.user && ui.user.role !== 'gear') { await logout(ui.user); ui.user = null; }
+  await cleanupTokens().catch(() => {}); // a session nobody needs any more (nothing waiting) is revoked
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
   await render();
   startSync();
+  // Left from a previous connection (another sheet): shown, never sent.
+  warnOtherOutboxes({ labels: OP, gear: true }).catch(() => {});
   setInterval(() => { if (!busy()) render(); }, 5 * 60000); // the 20:00 reminder without touching the screen
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const had = !!navigator.serviceWorker.controller;

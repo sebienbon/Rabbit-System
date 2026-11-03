@@ -1,6 +1,19 @@
 // Tiny promise wrapper around IndexedDB. Everything the interface knows lives here,
 // so it keeps working during an Internet outage and survives a browser restart.
-const DB_NAME = globalThis.RABBIT_DB || 'rabbit-reception'; // the gear app uses its own database
+import { CONFIG } from './config.js';
+
+/** Short stable hash (FNV-1a, base 36) of a text. */
+export function shortHash(text) {
+  let h = 0x811c9dc5;
+  for (const c of String(text || '')) { h ^= c.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+}
+// One database per sheet (server address): switching from the test copy to the real sheet
+// starts empty and never sends test operations to it. The gear app uses its own database.
+const DB_BASE = globalThis.RABBIT_DB || 'rabbit-reception';
+export const DB_NAME = DB_BASE + '-' + shortHash(CONFIG.API_URL);
+/** A localStorage key tied to this database (same sheet, same app). */
+export const localKey = k => DB_NAME + ':' + k;
 const DB_VERSION = 2;
 const STORES = ['kv', 'outbox', 'shifts', 'rejected', 'applied'];
 
@@ -60,3 +73,33 @@ export const db = {
   })),
   STORES,
 };
+
+/**
+ * Operations still waiting in another database of this app (an older server address, or the
+ * database from before it was tied to one). Only read, never sent: they belong to another sheet.
+ * Returns [{ name, ops }] for each such database with a non-empty outbox.
+ */
+export async function otherOutboxes() {
+  let list = [];
+  try { if (indexedDB.databases) list = await indexedDB.databases(); } catch { return []; }
+  const names = list.map(d => d.name).filter(n => n && n !== DB_NAME && (n === DB_BASE || (n.startsWith(DB_BASE + '-') && /^[0-9a-z]+$/.test(n.slice(DB_BASE.length + 1)))));
+  const out = [];
+  for (const name of names) {
+    try {
+      const ops = await new Promise((resolve, reject) => {
+        const req = indexedDB.open(name); // no version: never upgrades (or empties) it
+        req.onupgradeneeded = () => { req.transaction.abort(); resolve([]); }; // vanished meanwhile: do not create it
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+          const d = req.result;
+          if (!d.objectStoreNames.contains('outbox')) { d.close(); resolve([]); return; }
+          const r = d.transaction('outbox', 'readonly').objectStore('outbox').getAll();
+          r.onsuccess = () => { d.close(); resolve(r.result || []); };
+          r.onerror = () => { d.close(); reject(r.error); };
+        };
+      });
+      if (ops.length) out.push({ name, ops: ops.sort((a, b) => a.seq - b.seq) });
+    } catch { /* unreadable: nothing to show */ }
+  }
+  return out;
+}

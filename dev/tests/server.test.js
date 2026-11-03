@@ -150,7 +150,7 @@ test('offline login: colleague ops accepted only from the registered computer', 
   assert.ok(reg.registered && reg.deviceSecret);
   const p = env.call({ action: 'pull', token: reg.token });
   assert.ok(p.users, JSON.stringify(p));
-  assert.strictEqual(p.users.length, 2, 'registered device gets hashes for offline login');
+  assert.deepStrictEqual(p.users.map(u => u.username), ['ayu'], 'registered device gets hashes for offline login: active staff only (decision 2)');
   assert.ok(p.users.every(u => u.hash && u.salt && u.author));
   assert.strictEqual(login(env, 'ayu', 'pw-ayu', { deviceSecret: 'wrong' }).registered, false);
   const { token } = login(env, 'ayu', 'pw-ayu', { deviceSecret: reg.deviceSecret });

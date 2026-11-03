@@ -600,3 +600,11 @@ button.gawa { width: 100%; }
 .gaconds button.on[data-rc$="|OK"] { background: var(--ok); border-color: var(--ok); }
 .garowmin { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
 .garowmin .gaok { color: var(--ok); font-weight: 700; }
+
+/* Overdue but not charged yet (no evening check since the return time). */
+.gout.overdue .small { color: var(--warn); }
+/* Refused / stuck operations: details to copy by hand when the clipboard is refused. */
+.attention .row { display: flex; gap: 6px; flex-wrap: wrap; }
+.copybox { width: 100%; font: 12px/1.4 ui-monospace, monospace; margin-top: 6px; }
+.sync .clockwarn { flex-basis: 100%; }
+.gaattn h2 { color: var(--bad); }

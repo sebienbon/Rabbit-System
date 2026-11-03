@@ -1,6 +1,6 @@
 // End-to-end sales: real interface in Chrome + real server code on a fake sheet,
 // with an Internet cut in the middle. Run: node tests/e2e-sales.js
-const { chromium } = require('playwright-core');
+const { chromium } = (() => { try { return require('playwright-core'); } catch { return require('playwright'); } })();
 const assert = require('assert');
 const fs = require('fs');
 const { start } = require('./dev-server');
@@ -127,6 +127,8 @@ const step = m => console.log('  ✓ ' + m);
     const log = book['UI_Log'].data.slice(1);
     assert.ok(log.every(r => r[7] === 'applied'), JSON.stringify(log.map(r => [r[4], r[7], r[8]])));
     assert.strictEqual(new Set(log.map(r => r[1])).size, log.length, 'each operation once');
+    // The strip turns green before the screen redraws: give the redraw a moment.
+    await page.waitForFunction(() => !document.querySelector('.badge.wait'), null, { timeout: 10000 }).catch(() => {});
     assert.strictEqual((await page.$$('.badge.wait')).length, 0, 'nothing waiting any more');
     step('back online: sheet matches the screen, every operation applied once');
 
@@ -159,7 +161,7 @@ const step = m => console.log('  ✓ ' + m);
     await page.waitForSelector('.shift');
     await tab('shift');
     assert.strictEqual((await page.$$('[data-edit], [data-del]')).length, 0);
-    assert.ok((await page.$$('[data-refund]')).length > 0, 'refund stays possible');
+    assert.strictEqual((await page.$$('[data-refund]')).length, 0, 'a refund is done by the person on shift (or a manager)');
     step('a colleague sees the shift but cannot edit or delete its lines');
 
     // Phone width

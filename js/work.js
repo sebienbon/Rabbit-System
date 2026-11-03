@@ -1,9 +1,9 @@
 import { db } from './db.js';
 import { enqueue } from './sync.js';
-import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashboxView, shiftCash, partnerView, billNet, tsFromMs, lastSettlementView, cardLines, cardAmount } from './ledger.js';
+import { ledgerView, nextTs, shiftLines, totals, canChange, canRefund, cashRight, cashboxView, shiftCash, partnerView, billNet, tsFromMs, lastSettlementView, cardLines, cardAmount } from './ledger.js';
 import { money, parseMoney } from './shift.js';
 import { renderBar } from './bar.js'; // TEMPORARY (bar cash-out)
-import { gearView, backBefore, fmtWhen } from './gearcore.js';
+import { gearView, backBefore, fmtWhen, sameName } from './gearcore.js';
 import { renderGear } from './gear.js';
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
@@ -159,7 +159,7 @@ function renderSell(root, d) {
   };
 
   // Gear rental (mask, bike): the quantity is the number of days, one line per number picked.
-  const gearKind = name => d.gear && d.gear.product ? (name === d.gear.product.mask ? 'mask' : name === d.gear.product.bike ? 'bike' : null) : null;
+  const gearKind = name => d.gear && d.gear.product ? (sameName(name, d.gear.product.mask) ? 'mask' : sameName(name, d.gear.product.bike) ? 'bike' : null) : null;
   const pieces = it => (it.gear ? Math.max(it.gear.length, 1) : 1);
   const chosenNumbers = () => new Set(cart.items.flatMap(it => it.gear || []));
   const available = kind => (d.gear ? d.gear.items : []).filter(i => i.kind === kind && i.where === 'in' && i.condition === 'OK' && !chosenNumbers().has(i.id));
@@ -236,11 +236,15 @@ function renderSell(root, d) {
   };
   const addNumber = (i, g) => {
     const it = cart.items[i];
-    const hit = available(it.kind).find(x => x.id === String(g || '').trim().toUpperCase());
+    const id = String(g || '').trim().toUpperCase();
+    const hit = available(it.kind).find(x => x.id === id);
+    // Typed on purpose although recorded out (the guest left it in the box): it is returned first, no extension.
+    const resold = !hit && (d.gear ? d.gear.items : []).find(x => x.id === id && x.kind === it.kind && (x.where === 'out' || x.where === 'sunset') && !chosenNumbers().has(x.id));
     const err = cartEl.querySelector('#saleErr');
-    if (!hit) { err.textContent = `${String(g).toUpperCase()} is not available (out, broken or unknown).`; return; }
-    it.gear.push(hit.id);
+    if (!hit && !resold) { err.textContent = `${id} is not available (broken, lost, unknown or already in this sale).`; return; }
+    it.gear.push(id);
     renderCart(); renderProds();
+    if (resold) cartEl.querySelector('#saleErr').textContent = `${id} was recorded out (${resold.where === 'sunset' ? 'Sunset Boat' : resold.last ? resold.last.guest : ''}): it will be marked returned first, without extension.`;
     cartEl.querySelector(`[data-gearin="${i}"]`)?.focus();
   };
   root.addEventListener('focusin', e => { if (e.target.dataset && e.target.dataset.gearin !== undefined) showNumbers(+e.target.dataset.gearin, e.target.value); });
@@ -312,7 +316,9 @@ function lineRow(l, d, { showDay = false } = {}) {
   const amount = isExp ? -(l.cost || 0) : (l.total || 0);
   const edit = canChange(l, d.user, d.shift) && !isSupply && (!isExp || isSpend); // refund lines and cash supply: delete only
   const del = canChange(l, d.user, d.shift);
-  const ref = canRefund(l);
+  const ref = canRefund(l, d.user, d.shift);
+  // A mask or bike rental: the quantity is a number of days (whole).
+  const isGear = !!(d.gear && d.gear.product && l.type === 'Income' && [d.gear.product.mask, d.gear.product.bike].some(n => sameName(n, l.object)));
   let extra = '';
   if (ui.editing === l.ts && isSpend) {
     extra = `<form class="inline" data-expform="${esc(l.ts)}">
@@ -323,7 +329,7 @@ function lineRow(l, d, { showDay = false } = {}) {
       <p class="error" role="alert"></p></form>`;
   } else if (ui.editing === l.ts) {
     extra = `<form class="inline" data-editform="${esc(l.ts)}">
-      <label>Qty <input name="qty" inputmode="decimal" value="${esc(l.qty ?? '')}"${l.qty == null ? ' placeholder="—"' : ''}${l.bill ? ' disabled title="On a partner bill"' : ''}></label>
+      <label>${isGear ? 'Days' : 'Qty'} <input name="qty" inputmode="${isGear ? 'numeric' : 'decimal'}"${isGear ? ' data-whole="1"' : ''} value="${esc(l.qty ?? '')}"${l.qty == null ? ' placeholder="—"' : ''}${l.bill ? ' disabled title="On a partner bill"' : ''}></label>
       <label>Price per unit <span class="moneyin"><span class="cur">Rp</span><input name="unit" inputmode="numeric" value="${money(l.unit || 0)}"${l.bill ? ' disabled title="On a partner bill"' : ''}></span></label>
       <label>Payment <select name="payment">${[...new Set([l.payment, ...d.payments])].map(p => `<option${p === l.payment ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <label>Guest <input name="guest" value="${esc(l.guest)}"></label>
@@ -400,6 +406,7 @@ function bindLineActions(root, d) {
       const guest = f.guest.value.replace(/\s+/g, ' ').trim();
       const fixed = !!l.bill; // on a partner bill: quantity and price stay as billed
       if (!fixed && qty !== null && !(qty > 0 && qty <= 1000)) { err.textContent = 'Enter a quantity above 0 and up to 1000.'; return; }
+      if (!fixed && f.qty.dataset.whole && qty !== null && !(Number.isInteger(qty) && qty >= 1)) { err.textContent = 'Days of a rental: a whole number (1, 2, 3…).'; return; }
       if (!fixed && (!unit || unit > 1e9)) { err.textContent = 'Enter the price.'; return; }
       if (!guest) { err.textContent = 'Enter the guest.'; return; }
       const change = {};
@@ -493,7 +500,8 @@ function renderBill(root, d, guest) {
   root.innerHTML = `<section class="card bill">
     <button type="button" class="link back" data-back>All bills</button>
     <h2>${esc(guest)}</h2>
-    ${unpaid.length ? `<form id="payForm">
+    ${unpaid.length && !cashRight(d.user, d.shift) ? '<p class="muted">Only the person on shift or a manager can record a payment.</p>' : ''}
+    ${unpaid.length && cashRight(d.user, d.shift) ? `<form id="payForm">
       <h3 class="sub">To pay</h3>
       <ul class="lines">${unpaid.map(l => `<li class="line sel"><label class="check"><input type="checkbox" data-sel="${esc(l.ts)}"${ui.billSel.has(l.ts) ? ' checked' : ''}>
         <span class="what"><b>${esc(l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${lineDay(l.ts)} ${lineTime(l.ts)}</span></span></label>
@@ -502,7 +510,7 @@ function renderBill(root, d, guest) {
       <div class="pays" role="group" aria-label="Payment">${d.payments.filter(p => p !== 'Unpaid').map(p => `<button type="button" class="pay${ui.billPay === p ? ' on' : ''}" data-bpay="${esc(p)}" aria-pressed="${ui.billPay === p}">${esc(payLabel(p))}</button>`).join('')}</div>
       <button type="submit" class="primary wide">Record payment</button>
       <p class="error" role="alert"></p>
-    </form>` : '<p class="ok-note">Nothing left to pay.</p>'}
+    </form>` : unpaid.length ? '' : '<p class="ok-note">Nothing left to pay.</p>'}
     ${others.length ? `<h3 class="sub">Paid (last 3 weeks)</h3><ul class="lines">${others.map(l => lineRow(l, d, { showDay: true })).join('')}</ul>` : ''}
   </section>`;
   bindLineActions(root, d);
@@ -565,10 +573,12 @@ function renderExpenses(root, d) {
   const pays = d.payments.filter(p => p !== 'Paid to Partner');
   const mine = shiftLines(d.lines, d.shift).filter(l => l.type === 'Expense' && l.comment !== 'Refunding' && l.object !== 'Cash Supply');
   const minDate = new Date(Date.now() + 8 * 3600000 - 30 * 86400000).toISOString().slice(0, 10);
+  const allowed = cashRight(d.user, d.shift);
   root.innerHTML = `<div class="expenses">
     <section class="card">
       <h2>New expense</h2>
-      <form id="expForm" novalidate>
+      ${allowed ? '' : '<p class="muted">Only the person on shift or a manager can record an expense.</p>'}
+      <form id="expForm" novalidate${allowed ? '' : ' hidden'}>
         <fieldset class="field"><legend>What for</legend>
           <div class="eitems">${EXPENSE_ITEMS.map(it => `<button type="button" class="eitem ${it.tone}${ex.item === it.object ? ' on' : ''}" data-item="${esc(it.object)}" aria-pressed="${ex.item === it.object}">${esc(it.label)}</button>`).join('')}</div>
         </fieldset>
@@ -594,6 +604,7 @@ function renderExpenses(root, d) {
   </div>`;
   bindLineActions(root, d);
   const f = root.querySelector('#expForm');
+  if (!allowed) return;
   const err = f.querySelector('.error');
   f.addEventListener('click', e => {
     const b = e.target.closest('button');

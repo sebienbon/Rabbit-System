@@ -1,6 +1,6 @@
 // End-to-end cash box (phantom cash, cash supply): Chrome + real server code on a fake sheet, with an Internet cut.
 // Run: node tests/e2e-cash.js
-const { chromium } = require('playwright-core');
+const { chromium } = (() => { try { return require('playwright-core'); } catch { return require('playwright'); } })();
 const assert = require('assert');
 const fs = require('fs');
 const { start } = require('./dev-server');
@@ -108,7 +108,8 @@ const step = m => console.log('  ✓ ' + m);
     step('cash supply: two lines like the old dialog, not editable by staff, counted in the box');
 
     await page.click('#logout');
-    await page.click('[data-user="boss"]'); await page.fill('#p', 'boss123'); await page.click('button.primary');
+    await page.click('[data-act="typed"]'); await page.fill('#u', 'boss'); await page.fill('#p', 'boss123'); // managers have no tile (no hash kept)
+    await page.click('button.primary');
     await page.waitForSelector('.shift');
     await tab('shift');
     const supplyIncome = page.locator('li.line').filter({ hasText: 'Put in the box' });

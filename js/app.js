@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import { CONFIG } from './config.js';
-import { login, logout, currentUser, isRegistered } from './auth.js';
-import { startSync, onStatus, pushNow, pullNow, dismissRejected } from './sync.js';
+import { login, logout, currentUser, isRegistered, outboxOwners, cleanupTokens } from './auth.js';
+import { startSync, onStatus, pushNow, pullNow, dismissRejected, waitingCount, sheetReachable, warnOtherOutboxes, status as syncStatus, opDetails, copyText, CLOCK_WARN_MS } from './sync.js';
 import { currentShift, cashInBoxBeforeOpening, expectedCash, cashMovements, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
 import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy, partnerBusy, cardBusy } from './work.js';
 import { barBusy } from './bar.js'; // TEMPORARY (bar cash-out)
@@ -35,8 +35,10 @@ function renderStrip(s) {
   else if (s.state === 'sending' || n) { tone = 'busy'; title = 'Sending'; detail = `${ops(n)} on the way to the sheet.`; }
   else { title = 'Connected'; detail = s.lastSync ? `Everything is in the sheet. Last check ${time(s.lastSync)}.` : 'Everything is in the sheet.'; }
   el.dataset.tone = tone;
-  el.innerHTML = `<span class="dot" aria-hidden="true"></span><strong>${esc(title)}</strong><span class="detail">${esc(detail)}</span>` +
-    (s.rejected ? `<a href="#attention" class="attn">${s.rejected} need${s.rejected === 1 ? 's' : ''} attention</a>` : '') +
+  const attn = s.rejected + (s.stuck ? 1 : 0);
+  const skew = Math.abs(s.clockSkew || 0) > CLOCK_WARN_MS ? `<span class="detail warnline clockwarn">The clock of this computer is ${Math.round(Math.abs(s.clockSkew) / 60000)} min ${s.clockSkew > 0 ? 'behind' : 'ahead of'} the sheet: fix its date and time.</span>` : '';
+  el.innerHTML = `<span class="dot" aria-hidden="true"></span><strong>${esc(title)}</strong><span class="detail">${esc(detail)}</span>${skew}` +
+    (attn ? `<a href="#attention" class="attn">${attn} need${attn === 1 ? 's' : ''} attention</a>` : '') +
     (s.state === 'expired' && ui.user ? '<button type="button" class="ghost small relog" id="relog">Log in again to send</button>' : '');
   // After a restart during a cut, the sheet needs a password once the Internet is back:
   // logging in again keeps everything waiting on this computer and sends it.
@@ -53,9 +55,20 @@ function renderStrip(s) {
 async function renderLogin() {
   const users = ((await db.get('users')) || []).filter(u => u.role !== 'gear'); // gear staff use gear.html
   $('#who').innerHTML = '';
+  // No hand-over: while operations wait here, only the person who made them can log in.
+  const owner = (await outboxOwners())[0] || null;
+  const waiting = owner ? await waitingCount() : 0;
+  if (owner) { ui.pickedUser = owner; ui.typedUser = false; }
   const picked = ui.pickedUser;
   let body;
-  if (!users.length || ui.typedUser) {
+  if (owner) {
+    const u = users.find(x => x.username === owner);
+    body = `<p class="lead">Hello ${esc(u ? u.name : owner)}</p>
+      <p class="phwarn waitowner">${waiting} operation${waiting === 1 ? '' : 's'} of ${esc(u ? u.name : owner)} still waiting to be sent: only ${esc(u ? u.name : owner)} can log in until ${waiting === 1 ? 'it reaches' : 'they reach'} the sheet.</p>
+      <input type="hidden" id="u" value="${esc(owner)}">
+      <label class="field"><span>Password</span><input id="p" type="password" autocomplete="current-password" required autofocus></label>
+      <button class="primary" type="submit">Log in</button>`;
+  } else if (!users.length || ui.typedUser) {
     body = `
       <label class="field"><span>Username</span><input id="u" autocomplete="username" autocapitalize="none" required></label>
       <label class="field"><span>Password</span><input id="p" type="password" autocomplete="current-password" required></label>
@@ -239,6 +252,12 @@ async function renderShift() {
     $('#cancelClose').onclick = () => { ui.closing = null; render(); };
     $('#confirmClose').onclick = async () => {
       $('#confirmClose').disabled = true;
+      // A close is never queued offline: it waits until the sheet can take it at once.
+      if (!(await sheetReachable())) {
+        showError($('.confirm'), new Error('No internet: the shift can’t be closed now. Keep working, close it when the connection is back.'));
+        $('#confirmClose').disabled = false;
+        return;
+      }
       try {
         const closed = await closeShift(ui.user, shift, c);
         ui.closing = null; ui.tab = 'sell';
@@ -296,31 +315,53 @@ function showError(root, err) {
   p.textContent = err.message || String(err);
 }
 
+const OP_LABEL = { shift_open: 'Open shift', shift_close: 'Close shift', sale: 'Sale', line_update: 'Change', line_delete: 'Delete', settle: 'Bill payment', refund: 'Refund', expense: 'Expense',
+  phantom: 'Phantom cash', phantom_solve: 'Phantom cash solved', cash_supply: 'Cash supply', partner_bill: 'Partner bill', partner_bill_delete: 'Partner bill deleted', partner_settle: 'Partner bill paid',
+  card_settlement: 'Card settlement', bar_cashout: 'Bar cash-out',
+  gear_return: 'Gear return', gear_out: 'Volunteer outing', gear_confirm: 'Gear difference', gear_lost: 'Gear given up as lost', gear_decide: 'Gear damage decision', gear_service: 'Gear repaired',
+  sunset_out: 'Sunset Boat departure', sunset_back: 'Sunset Boat return', gear_count: 'Gear evening check' };
+// Gear refusals in words the desk understands (the sheet's own message follows).
+const GEAR_WHY = { gear_not_out: 'This number is not recorded as out', gear_unavailable: 'This number is not available (out, broken or lost)', line_not_found: 'Already done or no longer in the sheet' };
 function attention(rejected) {
-  if (!rejected.length) return '';
-  const label = { shift_open: 'Open shift', shift_close: 'Close shift', sale: 'Sale', line_update: 'Change', line_delete: 'Delete', settle: 'Bill payment', refund: 'Refund', expense: 'Expense' };
+  const stuck = syncStatus.stuck;
+  if (!rejected.length && !stuck) return '';
+  const label = OP_LABEL;
   const what = r => {
     const p = r.payload || {};
-    if (r.type === 'sale') return (p.lines || []).map(l => `${l.object.replace(/^-/, '')} for ${l.guest}`).slice(0, 3).join(', ') + ` (${p.payment})`;
+    if (r.type === 'sale') return (p.lines || []).map(l => `${l.object.replace(/^-/, '')} for ${l.guest}${l.gear ? ' (' + l.gear + ')' : ''}`).slice(0, 3).join(', ') + ` (${p.payment})`;
     if (r.type === 'expense') return `${p.object}: Rp ${money(p.amount)} (${p.payment})`;
+    if (r.type === 'gear_return' || r.type === 'gear_count') return (p.items || []).map(x => x.item + (x.condition && x.condition !== 'OK' ? ' ' + x.condition : '')).join(', ');
+    if (r.type === 'gear_out' || r.type === 'sunset_out' || r.type === 'sunset_back') return (p.items || []).join(', ');
+    if (r.type === 'gear_service') return p.item || '';
     return '';
   };
+  const why = r => [GEAR_WHY[r.error], r.message || r.error].filter(Boolean).join(' — ');
+  rendered = new Map([...rejected.map(r => [r.id, r]), ...(stuck ? [[stuck.id, stuck]] : [])]);
   return `<section class="card attention" id="attention">
-    <h2>Refused by the sheet</h2>
+    ${stuck ? `<h2>Not going through</h2>
+      <p class="muted">The sheet failed ${stuck.tries} times in a row on this operation. It is kept here and still retried; the ones after it wait behind it. Tell a manager.</p>
+      <ul><li><div><b>${esc(label[stuck.type] || stuck.type)}</b> by ${esc(stuck.by)}, ${esc(dayTime(stuck.at))}${what(stuck) ? `<br>${esc(what(stuck))}` : ''}<br><span class="why">${esc(stuck.message || '')}</span></div>
+        <button class="ghost small" data-copyop="${esc(stuck.id)}">Copy details</button></li></ul>` : ''}
+    ${rejected.length ? `<h2>Refused by the sheet</h2>
     <p class="muted">These were saved here but the sheet did not accept them. Tell a manager, then dismiss.</p>
-    <ul>${rejected.map(r => `<li><div><b>${esc(label[r.type] || r.type)}</b> by ${esc(r.by)}, ${esc(dayTime(r.at))}${what(r) ? `<br>${esc(what(r))}` : ''}<br><span class="why">${esc(r.message || r.error)}</span></div>
-      <button class="ghost small" data-dismiss="${esc(r.id)}">Dismiss</button></li>`).join('')}</ul></section>`;
+    <ul>${rejected.map(r => `<li><div><b>${esc(label[r.type] || r.type)}</b> by ${esc(r.by)}, ${esc(dayTime(r.at))}${what(r) ? `<br>${esc(what(r))}` : ''}<br><span class="why">${esc(why(r))}</span></div>
+      <span class="row"><button class="ghost small" data-copyop="${esc(r.id)}">Copy details</button><button class="ghost small" data-dismiss="${esc(r.id)}">Dismiss</button></span></li>`).join('')}</ul>` : ''}</section>`;
 }
+let rendered = new Map(); // operations listed in "needs attention", by id
 function bindAttention() {
   main().querySelectorAll('[data-dismiss]').forEach(b => b.onclick = async () => { await dismissRejected(b.dataset.dismiss); render(); });
+  main().querySelectorAll('[data-copyop]').forEach(b => b.onclick = async () => {
+    const r = rendered.get(b.dataset.copyop); if (!r) return;
+    if (await copyText(opDetails(r, OP_LABEL[r.type] || r.type), b)) { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy details'; }, 2000); }
+  });
 }
 
 // ---------- gear reminders ----------
 function gearBanner(g, ga) {
   if (!g) return '';
   const due = checkDue(g);
-  if (due) notifyOnce('gearcheck', 'Gear evening check', 'The masks and bikes have not been checked today.');
-  if (ga.diffs) notifyOnce('geardiff:' + ga.diffs, 'Gear differences', `${ga.diffs} difference${ga.diffs > 1 ? 's' : ''} to solve with the gear staff.`);
+  if (due) notifyOnce('gearcheck', 'Gear evening check', 'The masks and bikes have not been checked today.', './');
+  if (ga.diffs) notifyOnce('geardiff:' + ga.diffs, 'Gear differences', `${ga.diffs} difference${ga.diffs > 1 ? 's' : ''} to solve with the gear staff.`, './');
   if (!due && !ga.diffs) return '';
   const ask = 'Notification' in window && Notification.permission === 'default'
     ? ' <button type="button" class="ghost small" data-notifyon>Turn on reminders</button>' : '';
@@ -352,7 +393,13 @@ async function renderNow() {
     <button class="ghost small" id="logout">Log out</button>`;
   $('#logout').onclick = async () => {
     $('#logout').disabled = true;
-    if (ui.user.role !== 'staff') await pushNow(); // send what is waiting before the manager session goes
+    await pushNow(); // send what is waiting first
+    // Never leave with operations only on this computer: the next person could not send them.
+    const n = await waitingCount();
+    if (n) {
+      ui.notice = `${n} operation${n === 1 ? '' : 's'} still waiting to be sent — connect to the internet first, then log out.`;
+      $('#logout').disabled = false; render(); return;
+    }
     await logout(ui.user); ui.user = null; ui.closing = null; ui.cart = null; ui.expense = ui.phantom = ui.supply = ui.solving = ui.partner = ui.billOpen = ui.billPay = ui.billDel = ui.card = ui.bar = null; ui.supplyConfirm = false; ui.tab = 'sell'; ui.billGuest = null; noticeShown = null; render(); };
   const shiftOpen = !!(await currentShift());
   main().classList.toggle('wide', shiftOpen);
@@ -386,10 +433,20 @@ async function boot() {
   onStatus(renderStrip);
   onStatus((s, evt) => { if (evt && (evt.pulled || evt.pushed)) afterSync(); });
   ui.user = await currentUser();
+  // A manager's session is never restored when the app starts: the password is asked again.
+  if (ui.user && ui.user.role !== 'staff') {
+    const name = ui.user.username;
+    await logout(ui.user); // its session stays only to send what is waiting, revoked once sent
+    ui.user = null; ui.pickedUser = name; ui.notice = 'Type your password again to continue.';
+  }
+  // A manager's session left from before (nobody logged in, nothing waiting): revoked now.
+  await cleanupTokens().catch(() => {});
   // Ask the browser to keep this computer's data even when the disk gets full.
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
   await render();
   startSync();
+  // Left from a previous connection (another sheet): shown, never sent.
+  warnOtherOutboxes({ labels: OP_LABEL, gear: false }).catch(() => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('./sw.js').then(reg => setInterval(() => reg.update().catch(() => {}), 30 * 60000)).catch(() => {});

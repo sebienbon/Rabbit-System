@@ -4,7 +4,7 @@
 import { enqueue } from './sync.js';
 import { nextTs } from './ledger.js';
 import { money, parseMoney } from './shift.js';
-import { daysLate, fmtWhen, lastUseText, backBefore } from './gearcore.js';
+import { daysLate, isOverdue, fmtWhen, lastUseText, backBefore } from './gearcore.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const newId = p => p + Date.now().toString(36) + '-' + crypto.randomUUID().slice(0, 6);
@@ -16,6 +16,7 @@ const DIFF_TEXT = {
   rented_while_out: 'Rented at the desk while recorded elsewhere',
   returned_late: 'Returned late to the gear staff',
   returned_not_out: 'Handed to the gear staff, but not recorded as out',
+  sale_unlinked: 'Sold at the desk, but this number could not be linked (unknown, out of service or another product)',
 };
 const waText = t => `https://wa.me/?text=${encodeURIComponent(t)}`;
 
@@ -23,7 +24,7 @@ const lateText = ms => { const h = Math.max(1, Math.round(ms / 3600000)); const 
 
 export function gearAlerts(g) {
   if (!g) return { diffs: 0, late: 0 };
-  return { diffs: g.diffs.length, late: g.items.filter(i => i.where === 'out' && daysLate(i.back)).length };
+  return { diffs: g.diffs.length, late: g.items.filter(i => daysLate(i, g) > 0).length };
 }
 
 export async function renderGear(root, d) {
@@ -43,11 +44,15 @@ export async function renderGear(root, d) {
   const numBox = (key, list, ph) => `<div class="gearpick"><div class="gearbox">${chips(list, key)}<input data-${key}in autocomplete="off" placeholder="${ph}" aria-label="${ph}"></div>
     <ul class="suggest gsug" data-${key}sug role="listbox" hidden></ul></div>`;
 
+  // Counted in the box: the checks that found it there do not count (`seen`); without the
+  // list of checks, the one that found it is taken off.
+  const lateFound = (it, df) => (df.late > 0 ? df.late : Array.isArray(g.counts) ? daysLate(it, g) : Math.max(0, daysLate(it, g) - 1));
   const diffRow = df => {
     const it = byId.get(df.item) || {};
-    const late = it.last && it.last.kind === 'rental' ? daysLate(it.back) : 0;
+    const late = lateFound(it, df);
     let acts = '';
     if (df.reception) acts = `<span class="muted">You confirmed · waiting for the gear staff</span>`;
+    else if (df.pending && df.kind === 'sale_unlinked') acts = '<span class="muted small">To check once the sale is in the sheet.</span>';
     else if (!allowed) acts = '';
     else if (df.kind === 'returned_late') {
       const unit = extPrice(it), days = df.late || 1;
@@ -59,6 +64,8 @@ export async function renderGear(root, d) {
       ;
     } else if (df.kind === 'returned_not_out') {
       acts = `<span class="small">Gone without a sale or a Volunteer outing?</span> <button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked</button>`;
+    } else if (df.kind === 'sale_unlinked') {
+      acts = `<span class="small">The money is recorded. Check the number with the gear staff.</span> <button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked</button>`;
     } else if (df.kind === 'rented_while_out') {
       acts = `<button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked · it is with the guest</button>`;
     } else if (df.kind === 'counted_but_out') {
@@ -96,7 +103,7 @@ export async function renderGear(root, d) {
 
   const retRows = gr.items.map(id => {
     const it = byId.get(id); if (!it) return '';
-    const late = it.last && it.last.kind === 'rental' ? daysLate(it.back) : 0;
+    const late = daysLate(it, g);
     const conds = it.kind === 'bike' ? ['OK', 'Broken', 'Other', 'Lost'] : ['OK', 'Broken', 'Ring missing', 'Snorkel missing', 'Mask missing', 'Other', 'Lost'];
     return `<div class="gret"><b>${esc(id)}</b><span class="muted small">${esc(it.last ? it.last.guest : '')}</span>
       <select data-retcond="${esc(id)}" aria-label="Condition of ${esc(id)}">${conds.map(c => `<option${(gr.cond[id] || 'OK') === c ? ' selected' : ''}>${c}</option>`).join('')}</select>
@@ -111,11 +118,12 @@ export async function renderGear(root, d) {
       <div class="col">
         <section class="card gcard"><h2>Out now <span class="muted">· ${out.filter(i => i.kind === 'mask').length} masks · ${out.filter(i => i.kind === 'bike').length} bikes</span></h2>
           ${out.length ? `<ul class="gl">${out.map(i => {
-            const late = i.where === 'out' ? daysLate(i.back) : 0;
-            return `<li class="gout${late ? ' late' : ''}"><b class="gnum">${esc(i.id)}</b>
+            // Late (charged) only once an evening check found it still out; before that only overdue.
+            const late = daysLate(i, g), overdue = i.where === 'out' && isOverdue(i.back);
+            return `<li class="gout${late ? ' late' : overdue ? ' overdue' : ''}"><b class="gnum">${esc(i.id)}</b>
               <div><b>${esc(i.last ? i.last.guest : '')}</b>${i.pending ? ' <span class="badge wait">Waiting</span>' : ''}
-                <div class="small ${late ? 'warnline' : 'muted'}">${i.where === 'sunset' ? 'Sunset Boat · back 21:30' : late ? `Late since ${esc(fmtWhen(i.back))}` : `Back before ${esc(fmtWhen(i.back))}`}</div></div>
-              ${late && i.last && i.last.kind === 'rental' ? `<a class="ghost small walink" target="_blank" rel="noopener" href="${waText(`Hello ${i.last.guest}, this is The Rabbit Tree reception. Your ${i.kind === 'mask' ? 'snorkeling mask' : 'bike'} ${i.id} was due back ${fmtWhen(i.back)}. Could you bring it back to the reception? Thank you!`)}">WhatsApp guest</a>` : '<span></span>'}</li>`;
+                <div class="small ${late ? 'warnline' : 'muted'}">${i.where === 'sunset' ? 'Sunset Boat · back 21:30' : late ? `Late since ${esc(fmtWhen(i.back))} · ${late} evening check${late > 1 ? 's' : ''} since: ${late} day${late > 1 ? 's' : ''} extension` : overdue ? `Overdue since ${esc(fmtWhen(i.back))} · no extension before the evening check` : `Back before ${esc(fmtWhen(i.back))}`}</div></div>
+              ${overdue && i.last && i.last.kind === 'rental' ? `<a class="ghost small walink" target="_blank" rel="noopener" href="${waText(`Hello ${i.last.guest}, this is The Rabbit Tree reception. Your ${i.kind === 'mask' ? 'snorkeling mask' : 'bike'} ${i.id} was due back ${fmtWhen(i.back)}. Could you bring it back to the reception? Thank you!`)}">WhatsApp guest</a>` : '<span></span>'}</li>`;
           }).join('')}</ul>` : '<p class="muted">Nothing out.</p>'}
           ${g.trips.length ? `<div class="gsunset"><b>Sunset Boat today</b> · ${sunsetOut} mask${sunsetOut === 1 ? '' : 's'} on the boat now · ${sunsetDay} taken today · ${g.sunsetSales} Sunset Boat guest${g.sunsetSales === 1 ? '' : 's'} in the sales
             ${sunsetDay !== g.sunsetSales ? `<span class="muted small"> · ${Math.abs(sunsetDay - g.sunsetSales)} ${sunsetDay > g.sunsetSales ? 'more' : 'fewer'} mask${Math.abs(sunsetDay - g.sunsetSales) === 1 ? '' : 's'} taken than guests recorded</span>` : ''}</div>` : ''}
@@ -197,7 +205,7 @@ export async function renderGear(root, d) {
       b.disabled = true;
       const items = [];
       for (const id of gr.items) {
-        const it = byId.get(id), late = it && it.last && it.last.kind === 'rental' ? daysLate(it.back) : 0;
+        const it = byId.get(id), late = daysLate(it, g);
         const x = { item: id, condition: gr.cond[id] || 'OK' };
         if (late && extPrice(it) && !gr.noExt[id]) x.ext = { ts: await nextTs(), days: late, unit: extPrice(it) };
         items.push(x);
@@ -217,7 +225,7 @@ export async function renderGear(root, d) {
       const df = g.diffs.find(x => x.id === (ds.dfret || ds.dfsite)); if (!df) { d.render(); return; }
       const it = byId.get(df.item);
       const p = { cfid: newId('F'), diff: df.id, action: ds.dfret ? 'returned' : 'onsite' };
-      const late = it && it.last && it.last.kind === 'rental' ? daysLate(it.back) : 0;
+      const late = it ? lateFound(it, df) : 0;
       if (ds.dfret && late && extPrice(it) && !(ui.dfNoExt && ui.dfNoExt[df.id])) p.ext = { ts: await nextTs(), days: late, unit: extPrice(it) };
       await enqueue('gear_confirm', p);
       ui.notice = `${df.item}: ${ds.dfret ? 'returned by the guest' : 'found on site'}. Waiting for the gear staff to confirm.`;

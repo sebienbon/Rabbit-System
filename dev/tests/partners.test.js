@@ -156,7 +156,7 @@ test('a settlement paid in cash counts in the shift; a staff member cannot edit 
   assert.strictEqual(push(env, ayu, op('line_update', { ts: s1, qty: 2 })).results[0].error, 'forbidden');
   push(env, ayu, op('partner_settle', { bill: BILL, payment: 'Cash', rows: [{ object: '-Shuttle Bangsal / Kuta', ts: newTs(), net: 90000 }] }));
   const id = env.book['UI_Shifts'].data[1][0];
-  const c = push(env, ayu, op('shift_close', { shiftId: id, cashCounted: 1070000, expectedCash: 1070000 })); // +160000 − 90000
+  const c = push(env, ayu, op('shift_close', { shiftId: id, cashCounted: 1070000, expectedCash: 1070000 }, new Date(Date.now() + 1000).toISOString())); // +160000 − 90000
   assert.strictEqual(c.results[0].difference, 0);
 });
 
@@ -268,4 +268,18 @@ test('review: settlement window to the second; refused if out of order or withou
   assert.strictEqual(push(env, boss, op('card_settlement', { cid: cid(), s1: 0 }, new Date(Date.now() - 3600000).toISOString())).results[0].error, 'settlement_order');
   env.book['Settlements'].data.push(['', '', '', 'notes']);
   assert.strictEqual(push(env, boss, op('card_settlement', { cid: cid(), s1: 0 })).results[0].error, 'no_settlement');
+});
+
+test('S15: settling a bill writes column S only on the rows of that bill', () => {
+  const env = freshEnv();
+  const boss = login(env, 'boss');
+  push(env, boss, op('partner_bill', { bill: BILL, items: [{ ts: T(1), cost: 650000 }, { ts: T(2), cost: 350000 }] }));
+  const E = env.book['Entries'], writes = [];
+  const set = E.set.bind(E);
+  E.set = (r, c, v) => { if (c === 19) writes.push(r); return set(r, c, v); };
+  const ts = newTs();
+  assert.strictEqual(push(env, boss, op('partner_settle', { bill: BILL, payment: 'Cash', rows: [{ object: '-Horse Riding', ts, net: 600000 }] })).results[0].status, 'applied');
+  const rowNo = t => E.data.findIndex(r => r[14] === t) + 1;
+  assert.deepStrictEqual(writes.sort((a, b) => a - b), [rowNo(T(1)), rowNo(T(2)), rowNo(ts)].sort((a, b) => a - b));
+  assert.strictEqual(rowE(env, T(3))[18], 'B_01/10-10:00', 'other bill untouched');
 });

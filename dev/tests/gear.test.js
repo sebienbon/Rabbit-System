@@ -52,8 +52,8 @@ function rent(env, token, guest, numbers, days, payment = 'Unpaid', at) {
 test('back-before rule: 24 h, out before noon → next day 12:00, from noon → next day 18:00', () => {
   const env = freshEnv();
   const ayu = login(env, 'ayu'); openShift(env, ayu);
-  // 10:00 and 15:00 reception time (UTC+8) today.
-  const day = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  // 10:00 and 15:00 reception time (UTC+8) yesterday: always in the past (a time ahead of the sheet is refused).
+  const day = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
   const morning = new Date(day + 'T02:00:00Z').toISOString(), afternoon = new Date(day + 'T07:00:00Z').toISOString();
   assert.strictEqual(rent(env, ayu, 'Ann', ['SG001'], 1, 'Unpaid', morning).results[0].status, 'applied');
   assert.strictEqual(rent(env, ayu, 'Ben', ['SG002'], 2, 'Unpaid', afternoon).results[0].status, 'applied');
@@ -67,7 +67,7 @@ test('back-before rule: 24 h, out before noon → next day 12:00, from noon → 
   assert.ok(env.book['SG'].data[1][6] instanceof Date, 'back before is a date');
 });
 
-test('a rental is a sale line per number; a number already out never refuses the money, it becomes a difference', () => {
+test('a rental is a sale line per number; a number already out never refuses the money: it is returned first (resold)', () => {
   const env = freshEnv();
   const ayu = login(env, 'ayu'); openShift(env, ayu);
   const r = rent(env, ayu, 'Ann', ['SG001', 'SG002'], 2, 'Cash');
@@ -78,15 +78,19 @@ test('a rental is a sale line per number; a number already out never refuses the
   assert.strictEqual(again.results[0].status, 'applied');
   assert.strictEqual(env.book['Entries'].data.length, 5, 'the sale is written');
   const g = gearOf(env, ayu);
-  assert.deepStrictEqual(g.diffs.map(d => [d.item, d.kind]), [['SG002', 'rented_while_out']]);
+  assert.deepStrictEqual(g.diffs, [], 'decision 6: no difference, the previous rental is closed');
+  assert.ok(env.book['Gear_Log'].data.some(r => r[2] === 'return' && r[3] === 'SG002' && JSON.parse(r[7]).via === 'resold'));
   assert.strictEqual(item(g, 'SG002').last.guest, 'Ben');
   assert.strictEqual(rent(env, ayu, 'Ben', ['B1'], 1).results[0].status, 'applied', 'a bike');
 });
 
 test('return at the desk: late extension charged Unpaid, damage goes to the decisions', () => {
   const env = freshEnv();
-  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
   rent(env, ayu, 'Ann', ['SG001', 'SG002'], 1);
+  // Due yesterday, still out at an evening check since: one extension day (decision 5).
+  env.book['Gear_Log'].data.forEach(r => { if (r[2] === 'out') r[5] = new Date(Date.now() - 86400000); });
+  push(env, made, op('gear_count', { cid: id('K'), items: [] }));
   const r = push(env, ayu, op('gear_return', { gid: id('G'), items: [
     { item: 'SG001', condition: 'OK', ext: { ts: newTs(), days: 1, unit: 30000 } },
     { item: 'SG002', condition: 'Snorkel missing' }] }));
@@ -235,10 +239,12 @@ test('QwenWork findings: manager number read from the Note column; a departure o
   const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
   assert.strictEqual(gearOf(env, made).managerWa, '+62881011166142');
   rent(env, ayu, 'Ann', ['SG001'], 1);
-  assert.strictEqual(push(env, made, op('sunset_out', { trip: id('T'), items: ['SG001'] })).results[0].status, 'applied');
+  const so = push(env, made, op('sunset_out', { trip: id('T'), items: ['SG001'] })).results[0];
+  assert.strictEqual(so.status, 'applied');
+  assert.deepStrictEqual(so.items, [], 'S7: nothing left on the boat');
   const g = gearOf(env, ayu);
   assert.deepStrictEqual(g.trips, []);
-  assert.ok(g.diffs.some(d => d.item === 'SG001' && d.kind === 'counted_but_out'));
+  assert.deepStrictEqual(g.diffs, [], 'S7: nothing written');
 });
 
 test('Seb 03/11: a Sunset Boat mask can be returned at the desk, and is then not "missing" at the boat return', () => {
@@ -306,6 +312,7 @@ test('Seb 03/11: gear staff record returns (blind, late ones to the reception) a
   const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
   rent(env, ayu, 'Ann', ['SG001'], 1, 'Unpaid');
   env.book['Gear_Log'].data.forEach(r => { if (r[2] === 'out' && r[3] === 'SG001') r[5] = new Date(Date.now() - 2 * 86400000); }); // was due 2 days ago
+  push(env, made, op('gear_count', { cid: id('K'), items: [] }));  // the evening check did not find it
   rent(env, ayu, 'Ben', ['SG002'], 2);                         // on time
   const r = push(env, made, op('gear_return', { gid: id('G'), items: [
     { item: 'SG001', condition: 'OK' }, { item: 'SG002', condition: 'Ring missing' }, { item: 'SG003', condition: 'OK' }] }));
@@ -335,6 +342,7 @@ test('Seb 03/11: a damage carries the comment typed by the gear staff; bikes can
   const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
   rent(env, ayu, 'Ann', ['B1'], 1);
   env.book['Gear_Log'].data.forEach(r => { if (r[2] === 'out' && r[3] === 'B1') r[5] = new Date(Date.now() - 5 * 3600000); });
+  push(env, made, op('gear_count', { cid: id('K'), items: [] }));
   push(env, made, op('gear_return', { gid: id('G'), items: [{ item: 'B1', condition: 'Part missing', note: 'pedale gauche' }] }));
   const g = gearOf(env, ayu);
   const dm = g.damages.find(d => d.item === 'B1');

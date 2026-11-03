@@ -80,6 +80,7 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
   const props = {};
   const mails = [];
   const mailFail = { next: false };
+  const triggers = [];
   const ss = {
     getSpreadsheetTimeZone: () => tz,
     getSheetByName: n => book[n] || null,
@@ -125,12 +126,17 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) },
     Logger: { log() {} },
+    ScriptApp: {
+      getProjectTriggers: () => triggers.map(t => ({ getHandlerFunction: () => t.fn })),
+      newTrigger: fn => { const t = { fn }; const b = { timeBased: () => b, atHour: h => (t.hour = h, b), nearMinute: m => (t.minute = m, b),
+        everyDays: d => (t.every = d, b), inTimezone: z => (t.tz = z, b), create: () => { triggers.push(t); return t; } }; return b; },
+    },
     MailApp: { sendEmail(m) { if (mailFail.next) { mailFail.next = false; throw new Error('Mail service failed (simulated)'); } mails.push(m); } },
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(__dirname + '/../server/30.UI_api.gs', 'utf8'), ctx);
   const call = body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text);
-  return { ctx, book, props, call, mails, mailFail };
+  return { ctx, book, props, call, mails, mailFail, triggers };
 }
 
 module.exports = { makeEnv };

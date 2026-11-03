@@ -236,4 +236,7 @@ export function canChange(line, user, shift) {
   return !!shift && shift.status === 'open' && shift.user === user.username && (line.type === 'Income' || line.type === 'Expense') &&
     !REFUND_MARKS.includes(line.comment) && line.soldBy === user.username && line.ts >= tsFromIso(shift.openedAt);
 }
-export const canRefund = l => l.type === 'Income' && l.object !== 'Cash Supply' && l.payment !== 'Unpaid' && l.comment !== 'Refunded' && !l.pending;
+/** Cash-box rights (refund, bill payment, expense): staff only during their own open shift; managers always. */
+export const cashRight = (user, shift) => !!user && (user.role !== 'staff' || (!!shift && shift.status === 'open' && shift.user === user.username));
+export const canRefund = (l, user, shift) => cashRight(user, shift) &&
+  l.type === 'Income' && l.object !== 'Cash Supply' && l.payment !== 'Unpaid' && l.comment !== 'Refunded' && !l.pending;
