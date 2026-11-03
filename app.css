@@ -592,3 +592,11 @@ ul.plain li .num { margin-left: auto; }
 .ganote { margin: 0; }
 .ganote textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: var(--radius-sm); resize: vertical; }
 button.gawa { width: 100%; }
+.garev { display: grid; gap: 8px; }
+.garow1 { padding: 12px; display: grid; gap: 8px; }
+.garow1.bad { border: 2px solid var(--warn); }
+.garow1 .gnum { font-size: 1.1rem; }
+.gaconds button.on { background: var(--warn); border-color: var(--warn); color: #fff; }
+.gaconds button.on[data-rc$="|OK"] { background: var(--ok); border-color: var(--ok); }
+.garowmin { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.garowmin .gaok { color: var(--ok); font-weight: 700; }

@@ -14,7 +14,7 @@ const hhmm = iso => (fmtWhen(iso).split(' ').pop() || '');
 const DAYS = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const dayText = (iso = new Date().toISOString()) => { const d = new Date(Date.parse(iso) + 8 * 3600000); return `${DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; };
-const COND = { OK: 'Baik', 'Snorkel missing': 'Snorkel hilang', 'Ring missing': 'Ring hilang', 'Part missing': 'Ada bagian hilang', Broken: 'Rusak' };
+const COND = { OK: 'Baik', Broken: 'Rusak', 'Ring missing': 'Ring hilang', 'Snorkel missing': 'Snorkel hilang', 'Mask missing': 'Masker hilang', Other: 'Lainnya', 'Part missing': 'Ada bagian hilang' };
 const DIFF = {
   counted_but_out: 'ada di kotak, tapi tercatat keluar',
   returned_not_in_box: 'tercatat kembali, tapi tidak ada',
@@ -22,6 +22,7 @@ const DIFF = {
   sunset_missing: 'belum kembali dari Sunset Boat',
   rented_while_out: 'disewa di resepsi, tapi tercatat di tempat lain',
   returned_late: 'dikembalikan terlambat — resepsionis memutuskan biaya',
+  returned_not_out: 'dikembalikan, tapi tidak tercatat keluar',
 };
 const lastUse = l => !l ? 'Belum pernah dipakai' : l.kind === 'sunset' ? `Sunset Boat, ${dayText(l.from)}`
   : `${l.kind === 'volunteer' ? 'Volunteer' : 'sewa'}, ${l.guest}, ${dayText(l.from)}${l.returned ? ' → kembali ' + dayText(l.returned) + ' ' + hhmm(l.returned) : ''}`;
@@ -81,29 +82,35 @@ const grid = (items, cls, on, extra = () => '') => `<div class="gagrid ${cls}">$
   return `<button type="button" class="gacell${st ? ' ' + st : ''}" data-cell="${esc(it.id)}" aria-pressed="${!!st}">${esc(it.id)}${extra(it)}</button>`;
 }).join('')}</div>`;
 
-// Touch = here and OK; touch again = choose its condition (with the photo to the manager).
-const CONDS = kind => (kind === 'bike' ? ['OK', 'Part missing', 'Broken'] : ['OK', 'Snorkel missing', 'Ring missing', 'Broken']);
-const touchState = c => it => c.items[it.id] === undefined ? '' : c.items[it.id] === 'OK' ? 'on' : 'warn';
-const touchMark = c => it => (c.items[it.id] && c.items[it.id] !== 'OK' && it.kind === 'bike' ? ' · ' + COND[c.items[it.id]] : ''); // masks: the orange cell says it
-function touchPanel(g, c, what, outLabel) {
-  const sel = c.sel && g.items.find(i => i.id === c.sel);
-  if (!sel) return '';
-  return `<div class="card gapanel"><b>${esc(sel.id)} — kondisi</b>
-    <div class="gaconds">${CONDS(sel.kind).map(k => `<button type="button" class="${c.items[sel.id] === k ? 'on' : ''}" data-cond="${k}">${COND[k]}</button>`).join('')}</div>
-    ${c.items[sel.id] && c.items[sel.id] !== 'OK' ? `<label class="field ganote"><span>Komentar <em>opsional</em></span><textarea data-note="${esc(sel.id)}" rows="2" maxlength="300" placeholder="Apa yang rusak atau hilang?">${esc((c.notes || {})[sel.id] || '')}</textarea></label>
-      ${g.managerWa ? `<button type="button" class="ghost wide gawa" data-wa="${esc(sel.id)}" data-what="${esc(what)}">Kirim foto ke manajer (WhatsApp)</button>` : ''}` : ''}
-    <button type="button" class="ghost small" data-uncount>${esc(outLabel)}</button></div>`;
-}
-function touchGrids(g, c, list, what, outLabel) {
+// 1) Touch the numbers (here / back). 2) "Lanjut": each one is listed with its condition, Baik
+// by default; any other choice asks a comment and offers the photo to the manager on WhatsApp.
+const CONDS = kind => (kind === 'bike' ? ['OK', 'Broken', 'Other'] : ['OK', 'Broken', 'Ring missing', 'Snorkel missing', 'Mask missing', 'Other']);
+const newPick = () => ({ items: {}, notes: {}, review: false });
+function touchGrids(g, c, list) {
   const masks = list.filter(i => i.kind === 'mask'), bikes = list.filter(i => i.kind === 'bike');
-  const sel = c.sel && g.items.find(i => i.id === c.sel);
+  const on = it => (c.items[it.id] !== undefined ? 'on' : '');
   const n = l => l.filter(i => c.items[i.id] !== undefined).length;
-  return `<p class="gahint">Rusak atau ada yang hilang? <b>Sentuh lagi nomornya</b> untuk memilih kondisi, menulis komentar dan mengirim foto ke manajer.</p>
-    ${masks.length ? `<h2>Masker <span class="muted">· ${n(masks)} disentuh</span></h2>${grid(masks, 'six', touchState(c), touchMark(c))}` : ''}
-    ${sel && sel.kind === 'mask' ? touchPanel(g, c, what, outLabel) : ''}
-    ${bikes.length ? `<h2>Sepeda <span class="muted">· ${n(bikes)} disentuh</span></h2>${grid(bikes, 'three', touchState(c), touchMark(c))}` : ''}
-    ${sel && sel.kind === 'bike' ? touchPanel(g, c, what, outLabel) : ''}`;
+  return `${masks.length ? `<h2>Masker <span class="muted">· ${n(masks)} disentuh</span></h2>${grid(masks, 'six', on)}` : ''}
+    ${bikes.length ? `<h2>Sepeda <span class="muted">· ${n(bikes)} disentuh</span></h2>${grid(bikes, 'three', on)}` : ''}`;
 }
+function reviewList(g, c, what) {
+  const byId = new Map(g.items.map(i => [i.id, i]));
+  return `<p class="muted">Semua <b>Baik</b>? Simpan. Rusak atau ada yang hilang? Tekan <b>Ada masalah?</b> di nomornya.</p>
+    <div class="garev">${Object.keys(c.items).map(id => {
+      const it = byId.get(id) || { id, kind: 'mask' }, cur = c.items[id];
+      if (cur === 'OK' && !(c.open || {})[id]) return `<div class="garowmin"><b class="gnum">${esc(id)}</b><span class="gaok">Baik</span>
+        <button type="button" class="ghost small" data-problem="${esc(id)}">Ada masalah?</button></div>`;
+      return `<div class="card garow1${cur !== 'OK' ? ' bad' : ''}"><b class="gnum">${esc(id)}</b>
+        <div class="gaconds">${CONDS(it.kind).map(k => `<button type="button" class="${cur === k ? 'on' : ''}" data-rc="${esc(id)}|${k}">${COND[k]}</button>`).join('')}</div>
+        ${cur !== 'OK' ? `<label class="field ganote"><span>Komentar ${cur === 'Other' ? '<em>wajib</em>' : '<em>opsional</em>'}</span><textarea data-note="${esc(id)}" rows="2" maxlength="300" placeholder="Apa yang rusak atau hilang?">${esc(c.notes[id] || '')}</textarea></label>
+          ${g.managerWa ? `<button type="button" class="ghost wide gawa" data-wa="${esc(id)}" data-what="${esc(what)}">Kirim foto ke manajer (WhatsApp)</button>` : ''}` : ''}
+      </div>`;
+    }).join('')}</div>
+    <p class="error" data-err role="alert"></p>
+    <button type="button" class="ghost small" data-edit>‹ Ubah pilihan</button>`;
+}
+const checkNotes = c => Object.keys(c.items).find(id => c.items[id] === 'Other' && !String(c.notes[id] || '').trim());
+const itemsOf = c => Object.keys(c.items).map(id => ({ item: id, condition: c.items[id], note: String(c.notes[id] || '').trim() }));
 
 function home(g) {
   const open = g.trips.find(t => !t.closed);
@@ -135,15 +142,17 @@ function sunset(g) {
   const byId = new Map(g.items.map(i => [i.id, i]));
   if (open) {
     const its = open.items.map(id => byId.get(id) || { id, kind: 'mask' });
-    const c = ui.count = ui.count || { items: {}, sel: null };
+    const c = ui.count = ui.count || newPick();
     const backN = open.items.filter(id => c.items[id] !== undefined).length;
     const missing = open.items.filter(id => c.items[id] === undefined);
+    const warn = missing.length ? `<div class="phwarn">${missing.length} belum kembali: ${esc(missing.join(', '))}. Jika disimpan sekarang, menjadi selisih untuk resepsionis.</div>` : '';
+    if (c.review) return `${bar('Sunset Boat')}<div class="gabody"><h1>Kembali · kondisi</h1>${reviewList(g, c, 'Sunset Boat')}${warn}
+      <button type="button" class="primary wide" data-save="back">${missing.length ? `Simpan: ${backN} kembali, ${missing.length} jadi selisih` : `Simpan kembali (${backN})`}</button></div>`;
     return `${bar('Sunset Boat')}<div class="gabody">
       <h1>Kembali</h1>
-      <p class="muted">Berangkat ${hhmm(open.at)} · ${open.items.length} masker. Sentuh masker yang sudah kembali. Sentuh lagi jika rusak atau ada yang hilang.</p>
-      ${touchGrids(g, c, its, 'Sunset Boat', 'Belum kembali')}
-      ${missing.length && (backN || ui.sure) ? `<div class="phwarn">${missing.length} belum kembali: ${esc(missing.join(', '))}. Jika disimpan sekarang, menjadi selisih untuk resepsionis.</div>` : ''}
-      <button type="button" class="primary wide" data-save="back">${ui.sure ? `Ya, simpan: ${missing.length} jadi selisih` : `Simpan kembali (${backN}/${open.items.length})`}</button>
+      <p class="muted">Berangkat ${hhmm(open.at)} · ${open.items.length} masker. Sentuh masker yang sudah kembali, lalu Lanjut untuk kondisinya.</p>
+      ${touchGrids(g, c, its)}
+      <button type="button" class="primary wide" data-next>Lanjut (${backN}/${open.items.length})</button>
     </div>`;
   }
   const masks = g.items.filter(i => i.kind === 'mask' && !(g.unavailable || []).includes(i.id));
@@ -167,24 +176,28 @@ function count(g) {
       <button type="button" class="ghost wide" data-recount>Cek lagi</button>
     </div>`;
   }
-  const c = ui.count = ui.count || { items: {}, sel: null };
+  const c = ui.count = ui.count || newPick();
   const total = Object.keys(c.items).length;
+  if (c.review) return `${bar('Cek malam')}<div class="gabody"><h1>Cek malam · kondisi</h1>${reviewList(g, c, 'Cek malam')}
+    <button type="button" class="primary wide" data-save="count">${ui.sure ? `Ya, kirim (${total} barang)` : 'Kirim hasil cek'}</button>
+    <p class="muted small center">${ui.sure ? 'Sentuh lagi untuk mengirim. ' : ''}Setelah dikirim, hitungan tidak bisa diubah.</p></div>`;
   return `${bar('Cek malam')}<div class="gabody">
-    <p class="muted">Sentuh semua barang yang <b>benar-benar ada di depan Anda</b>. Sentuh lagi untuk memilih kondisi. Anda tidak melihat barang mana yang seharusnya keluar.</p>
-    ${touchGrids(g, c, g.items, 'Cek malam', 'Tidak ada di depan saya')}
-    <button type="button" class="primary wide" data-save="count"${total ? '' : ' disabled'}>${ui.sure ? `Ya, kirim (${total} barang)` : 'Kirim hasil cek'}</button>
-    <p class="muted small center">${ui.sure ? 'Sentuh lagi untuk mengirim. ' : ''}Setelah dikirim, hitungan tidak bisa diubah.</p>
+    <p class="muted">Sentuh semua barang yang <b>benar-benar ada di depan Anda</b>, lalu Lanjut untuk kondisinya. Anda tidak melihat barang mana yang seharusnya keluar.</p>
+    ${touchGrids(g, c, g.items)}
+    <button type="button" class="primary wide" data-next${total ? '' : ' disabled'}>Lanjut (${total})</button>
   </div>`;
 }
 
 function ret(g) {
-  const c = ui.count = ui.count || { items: {}, sel: null };
+  const c = ui.count = ui.count || newPick();
   const total = Object.keys(c.items).length;
+  if (c.review) return `${bar('Pengembalian')}<div class="gabody"><h1>Pengembalian · kondisi</h1>${reviewList(g, c, 'Pengembalian')}
+    <button type="button" class="primary wide" data-save="ret">Simpan pengembalian (${total})</button>
+    <p class="muted small center">Biaya keterlambatan atau kerusakan diputuskan oleh resepsionis.</p></div>`;
   return `${bar('Pengembalian')}<div class="gabody">
-    <p class="muted">Tamu mengembalikan masker atau sepeda kepada Anda? Sentuh nomornya. Sentuh lagi jika rusak atau ada yang hilang. Resepsionis akan melihatnya.</p>
-    ${touchGrids(g, c, g.items, 'Pengembalian', 'Batal')}
-    <button type="button" class="primary wide" data-save="ret"${total ? '' : ' disabled'}>Simpan pengembalian (${total})</button>
-    <p class="muted small center">Biaya keterlambatan diputuskan oleh resepsionis.</p>
+    <p class="muted">Tamu mengembalikan masker atau sepeda kepada Anda? Sentuh nomornya, lalu Lanjut untuk kondisinya.</p>
+    ${touchGrids(g, c, g.items)}
+    <button type="button" class="primary wide" data-next${total ? '' : ' disabled'}>Lanjut (${total})</button>
   </div>`;
 }
 
@@ -241,20 +254,26 @@ document.addEventListener('click', async e => {
     ui.sure = false;
     const touch = ui.screen === 'count' || ui.screen === 'ret' || (ui.screen === 'sunset' && g.trips.some(t => !t.closed));
     if (touch) {
-      const c = ui.count = ui.count || { items: {}, sel: null };
-      if (c.items[id] === undefined) { c.items[id] = 'OK'; c.sel = null; } else c.sel = c.sel === id ? null : id;
+      const c = ui.count = ui.count || newPick();
+      if (c.items[id] === undefined) c.items[id] = 'OK'; else { delete c.items[id]; delete c.notes[id]; }
     } else if (ui.sel.has(id)) ui.sel.delete(id); else ui.sel.add(id);
     render(); return;
   }
+  if (ds.next !== undefined) { const c = ui.count = ui.count || newPick(); c.review = true; ui.sure = false; render(); scrollTo(0, 0); return; }
+  if (ds.edit !== undefined) { ui.count.review = false; ui.sure = false; render(); return; }
+  if (ds.problem) { (ui.count.open = ui.count.open || {})[ds.problem] = true; render(); return; }
+  if (ds.rc) { const [id, k] = ds.rc.split('|'); ui.count.items[id] = k; ui.sure = false; render(); return; }
   if (ds.wa) {
-    const c = ui.count || { items: {}, notes: {} };
-    const note = (c.notes || {})[ds.wa];
+    const c = ui.count || newPick();
+    const note = String(c.notes[ds.wa] || '').trim();
     window.open(waLink(g.managerWa, `${ds.what} ${dayText()}: ${ds.wa} — ${COND[c.items[ds.wa]] || ''}.${note ? ' ' + note + '.' : ''} Foto terlampir.`), '_blank', 'noopener');
     return;
   }
-  if (ds.cond) { ui.count.items[ui.count.sel] = ds.cond; render(); return; }
-  if (ds.uncount !== undefined) { delete ui.count.items[ui.count.sel]; ui.count.sel = null; render(); return; }
-  if (ds.recount !== undefined) { ui.count = { items: {}, sel: null }; render(); return; }
+  if (ds.recount !== undefined) { ui.count = newPick(); render(); return; }
+  if (ds.save === 'back' || ds.save === 'ret' || ds.save === 'count') {
+    const miss = checkNotes(ui.count);
+    if (miss) { const er = document.querySelector('[data-err]'); if (er) er.textContent = `${miss}: tulis komentar untuk “Lainnya”.`; document.querySelector(`[data-note="${miss}"]`)?.focus(); return; }
+  }
   if (ds.later) { ui.later[ds.later] = true; render(); return; }
   if (ds.unlater) { delete ui.later[ds.unlater]; render(); return; }
   if (ds.confirm) {
@@ -271,21 +290,20 @@ document.addEventListener('click', async e => {
   if (ds.save === 'back') {
     const open = g.trips.find(t => !t.closed);
     if (!open) { ui.screen = 'home'; render(); return; }
-    const c = ui.count || { items: {} };
+    const c = ui.count || newPick();
     const missing = open.items.filter(id => c.items[id] === undefined);
-    if (missing.length && !ui.sure) { ui.sure = true; render(); return; }
     b.disabled = true;
     const items = open.items.filter(id => c.items[id] !== undefined);
     const conditions = Object.fromEntries(items.filter(id => c.items[id] !== 'OK').map(id => [id, c.items[id]]));
-    const notes = Object.fromEntries(Object.keys(conditions).filter(id => (c.notes || {})[id]).map(id => [id, c.notes[id]]));
+    const notes = Object.fromEntries(Object.keys(conditions).filter(id => c.notes[id]).map(id => [id, String(c.notes[id]).trim()]));
     await enqueue('sunset_back', { trip: open.trip, items, conditions, notes });
     const broken = Object.keys(conditions).length;
-    ui.notice = (missing.length ? `Disimpan. ${missing.length} belum kembali → selisih untuk resepsionis.` : 'Semua masker kembali.') + (broken ? ` ${broken} rusak → resepsionis memutuskan.` : '');
+    ui.notice = (missing.length ? `Disimpan. ${missing.length} belum kembali → selisih untuk resepsionis.` : 'Semua masker kembali.') + (broken ? ` ${broken} bermasalah → resepsionis memutuskan.` : '');
     ui.count = null; ui.sure = false; ui.screen = 'home'; render(); return;
   }
   if (ds.save === 'ret') {
     b.disabled = true;
-    const items = Object.entries(ui.count.items).map(([item, condition]) => ({ item, condition, note: (ui.count.notes || {})[item] || '' }));
+    const items = itemsOf(ui.count);
     await enqueue('gear_return', { gid: newId('G'), items });
     ui.notice = `Pengembalian disimpan: ${items.map(x => x.item).join(', ')}.`;
     ui.count = null; ui.screen = 'home'; render(); return;
@@ -293,7 +311,7 @@ document.addEventListener('click', async e => {
   if (ds.save === 'count') {
     if (!ui.sure) { ui.sure = true; render(); return; }
     b.disabled = true;
-    const items = Object.entries(ui.count.items).map(([item, condition]) => ({ item, condition, note: (ui.count.notes || {})[item] || '' }));
+    const items = itemsOf(ui.count);
     await enqueue('gear_count', { cid: newId('K'), items });
     ui.count = null; ui.sure = false;
     ui.notice = 'Cek terkirim. Hasilnya muncul di sini setelah sampai di sheet.'; render(); return;
@@ -303,7 +321,7 @@ document.addEventListener('click', async e => {
 // A comment is kept as it is typed (no redraw, the keyboard stays open).
 document.addEventListener('input', e => {
   const t = e.target;
-  if (t.dataset && t.dataset.note !== undefined && ui.count) (ui.count.notes = ui.count.notes || {})[t.dataset.note] = t.value;
+  if (t.dataset && t.dataset.note !== undefined && ui.count) ui.count.notes[t.dataset.note] = t.value;
 });
 
 async function boot() {

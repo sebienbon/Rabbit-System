@@ -75,9 +75,9 @@ const step = m => console.log('  ✓ ' + m);
     await phone.click('[data-save="out"]');
     await until(() => log().some(r => r[2] === 'sunset_out'), 'sunset out logged');
     await phone.click('[data-go="sunset"]');
-    await phone.waitForSelector('[data-save="back"]');
+    await phone.waitForSelector('[data-next]');
     await phone.click('[data-cell="SG002"]');
-    await phone.click('[data-save="back"]'); // first click warns: SG003 missing
+    await phone.click('[data-next]'); // check screen: SG002 Baik; SG003 not back
     await phone.waitForSelector('[data-save="back"]:has-text("selisih")');
     await phone.click('[data-save="back"]');
     await until(() => log().some(r => r[2] === 'diff' && r[3] === 'SG003'), 'sunset diff');
@@ -91,8 +91,8 @@ const step = m => console.log('  ✓ ' + m);
     assert.ok(cells.includes('SG001') && cells.includes('B1442'), cells.join());
     assert.strictEqual(await phone.$('.gacell.on'), null, 'nothing pre-marked: the check is blind');
     for (const id of cells) if (!['SG003', 'SG005'].includes(id)) await phone.click(`[data-cell="${id}"]`);
-    await phone.click('[data-cell="SG006"]'); // second touch: condition
-    await phone.click('[data-cond="Snorkel missing"]');
+    await phone.click('[data-next]'); // check screen: conditions
+    await phone.click('[data-problem="SG006"]'); await phone.click('[data-rc="SG006|Snorkel missing"]');
     await phone.waitForSelector('button.gawa[data-wa="SG006"]'); await phone.fill('[data-note="SG006"]', 'tali putus');
     await phone.screenshot({ path: `${shots}/g03-count.png`, fullPage: true });
     await phone.click('[data-save="count"]'); await phone.click('[data-save="count"]');
@@ -135,7 +135,10 @@ const step = m => console.log('  ✓ ' + m);
 
     // Gear staff record a return themselves (blind), with a damage.
     await phone.click('[data-go="home"]'); await phone.click('[data-go="ret"]');
-    await phone.click('[data-cell="SG008"]'); await phone.click('[data-cell="SG008"]'); await phone.click('[data-cond="Broken"]');
+    await phone.click('[data-cell="SG008"]'); await phone.click('[data-next]'); await phone.click('[data-problem="SG008"]'); await phone.click('[data-rc="SG008|Other"]');
+    await phone.click('[data-save="ret"]'); // a comment is required for "Lainnya"
+    await phone.waitForSelector('[data-err]:has-text("komentar")');
+    await phone.fill('[data-note="SG008"]', 'tali masker putus');
     await phone.screenshot({ path: `${shots}/g05-staff-return.png` });
     await phone.click('[data-save="ret"]');
     await until(() => log().some(r => r[2] === 'staff_return') && log().some(r => r[2] === 'damage' && r[3] === 'SG008'), 'staff return logged');

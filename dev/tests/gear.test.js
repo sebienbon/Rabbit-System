@@ -342,3 +342,19 @@ test('Seb 03/11: a damage carries the comment typed by the gear staff; bikes can
   const late = g.diffs.find(d => d.kind === 'returned_late');
   assert.ok(late.due && late.returned && Date.parse(late.returned) - Date.parse(late.due) > 4 * 3600000);
 });
+
+test('Seb 03/11: a number handed to the gear staff but not out is checked by the reception (hidden from the staff); mask missing keeps it out of rental', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  push(env, made, op('gear_return', { gid: id('G'), items: [{ item: 'SG004', condition: 'Mask missing', note: 'snorkel only' }] }));
+  const g = gearOf(env, ayu);
+  const d = g.diffs.find(x => x.kind === 'returned_not_out');
+  assert.ok(d && d.item === 'SG004' && d.gear);
+  assert.ok(!gearOf(env, made).diffs.some(x => x.kind === 'returned_not_out'), 'blind: not shown to the gear staff');
+  assert.strictEqual(item(g, 'SG004').condition, 'Mask missing');
+  assert.ok(g.damages.some(x => x.item === 'SG004' && x.note === 'snorkel only'));
+  assert.ok(gearOf(env, made).unavailable.includes('SG004'));
+  const c = push(env, ayu, op('gear_confirm', { cfid: id('F'), diff: d.id, action: 'found' }));
+  assert.strictEqual(c.results[0].status, 'applied');
+  assert.ok(!gearOf(env, ayu).diffs.some(x => x.id === d.id));
+});

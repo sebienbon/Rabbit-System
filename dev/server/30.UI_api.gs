@@ -765,7 +765,7 @@ var UIAPI = (function () {
     ['Ring', '', ''], ['Full snorkeling set (lost)', '', ''], ['Bike — repair', '', 'reception types the amount if empty'],
     ['Extension per day — mask', 30000, ''], ['Extension per day — bike', '', ''], ['Mask rental product', 'Snorkeling Mask', 'name in Data activities'],
     ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', 'number in column B, e.g. +62 812…']];
-  var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Part missing', 'Broken', 'Lost'];
+  var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Mask missing', 'Part missing', 'Broken', 'Other', 'Lost'];
   var gnote_ = function (v) { return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 300); }; // comment on a damage
   var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1, gear_return: 1 }; // what the gear role may send
   /**
@@ -806,7 +806,7 @@ var UIAPI = (function () {
     var price = function (k) { var v = map[k]; return v === '' || v === undefined || v === null ? null : num_(v); };
     return {
       prices: { 'Snorkel missing': price('Snorkel'), 'Ring missing': price('Ring'), 'Broken': price('Mask (without snorkel)'),
-        'Lost': price('Full snorkeling set (lost)'), 'Bike': price('Bike — repair') },
+        'Lost': price('Full snorkeling set (lost)'), 'Mask missing': price('Mask (without snorkel)'), 'Bike': price('Bike — repair') },
       ext: { mask: price('Extension per day — mask'), bike: price('Extension per day — bike') },
       product: { mask: String(map['Mask rental product'] || 'Snorkeling Mask'), bike: String(map['Bike rental product'] || 'Rabbit bike') },
       managerWa: String(map['Manager WhatsApp'] || '').replace(/[^\d+]/g, '')
@@ -958,7 +958,8 @@ var UIAPI = (function () {
   /** What the gear app may see: the list of numbers only (the check is blind), trips, differences. */
   function gearForStaffApp_(st) {
     var set = gearSettings_();
-    return { items: st.items.map(function (i) { return { id: i.id, kind: i.kind }; }), trips: st.trips, diffs: st.diffs,
+    return { items: st.items.map(function (i) { return { id: i.id, kind: i.kind }; }), trips: st.trips,
+      diffs: st.diffs.filter(function (d) { return d.kind !== 'returned_late' && d.kind !== 'returned_not_out'; }), // reception's business; would tell what was out
       countedToday: st.countedToday, lastCount: st.lastCount, sunsetSales: sunsetSalesToday_(), managerWa: set.managerWa,
       unavailable: st.items.filter(function (i) { return i.condition !== 'OK' || i.where === 'lost'; }).map(function (i) { return i.id; }) };
   }
@@ -1018,6 +1019,12 @@ var UIAPI = (function () {
       var it = gearItem_(st, x.item), id = gid + '-' + it.id;
       var cond = GEAR_CONDITIONS.indexOf(x.condition) >= 0 ? x.condition : 'OK';
       var guest = it.last ? it.last.guest : '';
+      if (it.where !== 'out' && it.where !== 'sunset') {
+        // Not recorded as out: accepted without a word (blind), but the reception checks it (gone without a sale?).
+        rows.push({ at: at, id: id + '-nout', type: 'diff', item: it.id, ref: gid, by: me.username, d: { kind: 'returned_not_out', last: it.last } });
+        rows.push({ at: at, id: id + '-nout-g', type: 'confirm', item: it.id, ref: id + '-nout', by: me.username, d: { side: 'gear', action: 'returned' } });
+        if (it.where === 'lost') rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond, via: 'gear staff' } }); // found again
+      }
       if (it.where === 'out' || it.where === 'sunset') {
         rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond, via: 'gear staff' } });
         var late = it.where === 'out' && it.last && it.last.kind === 'rental' && it.back && at.getTime() > Date.parse(it.back)
@@ -1753,7 +1760,7 @@ var UIAPI = (function () {
       if (gearEventDone_(lid)) return { already: true };
       var st = gearState_(), df = st.diffs.filter(function (d) { return d.id === String(p.diff); })[0];
       if (!df) throw apiError_('line_not_found', 'This difference is already closed');
-      if (df.kind === 'counted_but_out' || df.kind === 'rented_while_out' || df.kind === 'returned_late') throw apiError_('bad_payload', df.item + ' was seen: it cannot be marked lost');
+      if (df.kind === 'counted_but_out' || df.kind === 'rented_while_out' || df.kind === 'returned_late' || df.kind === 'returned_not_out') throw apiError_('bad_payload', df.item + ' was seen: it cannot be marked lost');
       assertCashRight_(me);
       var guest = df.last ? df.last.guest : '';
       gearLog_([{ at: at, id: lid, type: 'lost', item: df.item, ref: df.id, by: me.username, d: {} },

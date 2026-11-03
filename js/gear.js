@@ -15,6 +15,7 @@ const DIFF_TEXT = {
   sunset_missing: 'Not back from the Sunset Boat',
   rented_while_out: 'Rented at the desk while recorded elsewhere',
   returned_late: 'Returned late to the gear staff',
+  returned_not_out: 'Handed to the gear staff, but not recorded as out',
 };
 const waText = t => `https://wa.me/?text=${encodeURIComponent(t)}`;
 
@@ -56,6 +57,8 @@ export async function renderGear(root, d) {
         <button type="button" class="primary small" data-dfwaive="${esc(df.id)}">Waive it</button>
         ${unit ? `<button type="button" class="ghost small" data-dflate="${esc(df.id)}">Charge ${days} day${days > 1 ? 's' : ''} extension · ${money(days * unit)}</button>` : '<span class="small warnline">No extension price in Gear_Settings</span>'}`
       ;
+    } else if (df.kind === 'returned_not_out') {
+      acts = `<span class="small">Gone without a sale or a Volunteer outing?</span> <button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked</button>`;
     } else if (df.kind === 'rented_while_out') {
       acts = `<button type="button" class="primary small" data-dffound="${esc(df.id)}">Checked · it is with the guest</button>`;
     } else if (df.kind === 'counted_but_out') {
@@ -94,7 +97,7 @@ export async function renderGear(root, d) {
   const retRows = gr.items.map(id => {
     const it = byId.get(id); if (!it) return '';
     const late = it.last && it.last.kind === 'rental' ? daysLate(it.back) : 0;
-    const conds = it.kind === 'bike' ? ['OK', 'Part missing', 'Broken', 'Lost'] : ['OK', 'Snorkel missing', 'Ring missing', 'Broken', 'Lost'];
+    const conds = it.kind === 'bike' ? ['OK', 'Broken', 'Other', 'Lost'] : ['OK', 'Broken', 'Ring missing', 'Snorkel missing', 'Mask missing', 'Other', 'Lost'];
     return `<div class="gret"><b>${esc(id)}</b><span class="muted small">${esc(it.last ? it.last.guest : '')}</span>
       <select data-retcond="${esc(id)}" aria-label="Condition of ${esc(id)}">${conds.map(c => `<option${(gr.cond[id] || 'OK') === c ? ' selected' : ''}>${c}</option>`).join('')}</select>
       ${late ? (extPrice(it) ? `<label class="check small warnline"><input type="checkbox" data-retext="${esc(id)}"${gr.noExt[id] ? '' : ' checked'}> late ${late} day${late > 1 ? 's' : ''}: extension ${money(late * extPrice(it))} (Unpaid)</label>`
