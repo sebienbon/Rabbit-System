@@ -255,3 +255,25 @@ test('Seb 03/11: a Sunset Boat mask can be returned at the desk, and is then not
   assert.strictEqual(item(g, 'SG002').where, 'in');
   assert.strictEqual(env.book['SG'].data[1][3], 'In');
 });
+
+test('Seb 03/11: quantity = days on a rental line; correcting it moves the return time, deleting the line puts the number back', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  rent(env, ayu, 'Ann', ['SG001', 'SG002'], 1);
+  const lines = env.book['Entries'].data.slice(1);
+  assert.deepStrictEqual(lines.map(l => [l[4], l[16]]), [[1, 'SG001'], [1, 'SG002']], 'one line per number, qty = days');
+  const ts1 = String(lines[0][14]), ts2 = String(lines[1][14]);
+  const before = item(gearOf(env, ayu), 'SG001').back;
+  let r = push(env, ayu, op('line_update', { ts: ts1, qty: 3, guest: 'Ann B' }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  let g = gearOf(env, ayu);
+  assert.strictEqual(Date.parse(item(g, 'SG001').back) - Date.parse(before), 2 * 86400000, 'two more days');
+  assert.strictEqual(item(g, 'SG001').last.guest, 'Ann B');
+  assert.strictEqual(env.book['Entries'].data[1][6], 90000);
+  r = push(env, ayu, op('line_delete', { ts: ts2 }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  g = gearOf(env, ayu);
+  assert.strictEqual(item(g, 'SG002').where, 'in');
+  assert.strictEqual(item(g, 'SG001').where, 'out');
+  assert.strictEqual(env.book['SG'].data[2][3], 'In');
+});

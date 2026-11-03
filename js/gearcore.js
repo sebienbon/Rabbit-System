@@ -43,6 +43,14 @@ export function applyGearOps(snap, ops, side = 'reception') {
         it.where = 'out'; it.back = new Date(backBefore(at(op), Math.max(1, Math.round(l.qty || 1)))).toISOString();
         it.last = { kind: 'rental', guest: l.guest, from: op.at, saleTs: l.ts }; mark(it);
       }
+    } else if (op.type === 'line_update' || op.type === 'line_delete') {
+      // A corrected or deleted rental line: its number follows (days = quantity, guest).
+      const it = [...items.values()].find(i => i.where === 'out' && i.last && i.last.kind === 'rental' && String(i.last.saleTs) === String(p.ts));
+      if (!it) continue;
+      if (op.type === 'line_delete') { ret(it, it.condition, op.at); mark(it); continue; }
+      if (p.qty !== undefined) it.back = new Date(backBefore(Date.parse(it.last.from), Math.max(1, Math.round(Number(p.qty) || 1)))).toISOString();
+      if (p.guest) it.last.guest = p.guest;
+      mark(it);
     } else if (op.type === 'gear_out') {
       for (const id of p.items || []) {
         const it = items.get(id); if (!it || it.where !== 'in') continue;

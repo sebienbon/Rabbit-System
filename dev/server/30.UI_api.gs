@@ -886,7 +886,7 @@ var UIAPI = (function () {
       var it = items[e.item];
       if (e.type === 'out' && it) {
         it.where = 'out'; it.back = e.back ? e.back.toISOString() : null;
-        it.last = { kind: e.d.kind || 'rental', guest: e.ref, from: e.at.toISOString(), saleTs: e.d.saleTs || '' };
+        it.last = { kind: e.d.kind || 'rental', guest: e.ref, from: e.d.from || e.at.toISOString(), saleTs: e.d.saleTs || '' };
       } else if (e.type === 'return' && it) {
         it.where = 'in'; it.back = null; it.condition = e.d.condition || 'OK';
         if (it.last) it.last.returned = e.at.toISOString();
@@ -977,6 +977,26 @@ var UIAPI = (function () {
     var ent = entries_(), man = manual_();
     appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }));
     appendManual_(man, rows.filter(function (r) { return !man.byTs[r[E.ts]]; }));
+  }
+  /**
+   * A rental line was corrected (days = quantity, guest) or deleted: the number still out on
+   * that rental follows — new return time / guest, or back in stock if the sale is gone.
+   */
+  function gearFollowLine_(op, me, ts, row, deleted) {
+    if (!ss_().getSheetByName(SHEETS.gearLog)) return;
+    var st = gearState_(), it = st.items.filter(function (i) { return i.where === 'out' && i.last && i.last.kind === 'rental' && String(i.last.saleTs) === String(ts); })[0];
+    if (!it) return;
+    var id = ('G' + ts + '-' + (deleted ? 'x' : 'u') + String(op.id).replace(/[^\w]/g, '')).slice(0, 60);
+    if (gearEventDone_(id)) return;
+    var at = parseAt_(op.at), from = new Date(it.last.from);
+    if (deleted) {
+      gearLog_([{ at: at, id: id, type: 'return', item: it.id, ref: it.last.guest, by: me.username, d: { condition: it.condition, via: 'sale deleted' } }]);
+    } else {
+      var days = Math.max(1, Math.round(num_(row[E.qty]) || 1)), guest = String(row[E.guest] || it.last.guest);
+      gearLog_([{ at: at, id: id, type: 'out', item: it.id, ref: guest, back: gearBack_(from, days), by: me.username,
+        d: { kind: 'rental', days: days, saleTs: String(ts), from: from.toISOString() } }]);
+    }
+    sgUpdate_();
   }
   function assertGearDesk_(me) {
     if (me.role === 'gear') throw apiError_('forbidden', 'This is done at the reception');
@@ -1096,6 +1116,7 @@ var UIAPI = (function () {
         man.sheet.getRange(n, M.realCost + 1, 1, 3).setValues([[row[E.realCost], row[E.guest], row[E.pay]]]);
         man.sheet.getRange(n, M.comment + 1).setValue(row[E.comment]);
       });
+      gearFollowLine_(op, me, ts, row, false);
       return { audit: { before: before } };
     },
     /** Remove a line, every copy of it in both sheets (bottom-up so row numbers stay valid). */
@@ -1106,12 +1127,13 @@ var UIAPI = (function () {
       var ent = entries_(), man = manual_();
       var eRows = (ent.all[ts] || []).slice().sort(function (a, b) { return b - a; });
       var mRows = (man.all[ts] || []).slice().sort(function (a, b) { return b - a; });
-      if (!eRows.length && !mRows.length) return { already: true };
+      if (!eRows.length && !mRows.length) { gearFollowLine_(op, me, ts, null, true); return { already: true }; } // retry: finish the gear part
       var before = null;
       if (eRows.length) { before = lineOut_(ent.rows[eRows[0] - 2]); assertCanChange_(me, ent.rows[eRows[0] - 2]); }
       else if (me.role === 'staff') throw apiError_('forbidden', 'Ask a manager to delete this line');
       mRows.forEach(function (n) { verify_(man.sheet, n, M.ts + 1, ts); man.sheet.deleteRow(n); });
       eRows.forEach(function (n) { verify_(ent.sheet, n, E.ts + 1, ts); ent.sheet.deleteRow(n); });
+      gearFollowLine_(op, me, ts, null, true); // the rental is gone: its number is back in stock
       return { audit: { before: before } };
     },
     /**

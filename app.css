@@ -537,6 +537,7 @@ ul.plain li .num { margin-left: auto; }
 .tabs [data-tab="cash"]     { --logo: url(img/phantom.webp); }
 .tabs [data-tab="partners"] { --logo: url(img/partners.webp); }
 .tabs [data-tab="card"]     { --logo: url(img/edc.webp); }
+.tabs [data-tab="gear"]     { --logo: url(img/gear.webp); }
 .tabs [data-tab="shift"]    { --logo: url(img/summary.webp); }
 .tabs [data-tab="close"]    { --logo: url(img/close.webp); }
 .tabs button:not([data-tab="bar"])::before { width: 28px; height: 28px; -webkit-mask: none; mask: none; background: var(--logo) center / contain no-repeat; }
@@ -551,6 +552,7 @@ ul.plain li .num { margin-left: auto; }
 .card.shift:has([data-tab="cash"][aria-selected="true"])     { --hero: url(img/phantom.webp); }
 .card.shift:has([data-tab="partners"][aria-selected="true"]) { --hero: url(img/partners.webp); }
 .card.shift:has([data-tab="card"][aria-selected="true"])     { --hero: url(img/edc.webp); }
+.card.shift:has([data-tab="gear"][aria-selected="true"])     { --hero: url(img/gear.webp); }
 .card.shift:has([data-tab="bar"][aria-selected="true"])      { --hero: none; }
 .card.shift:has([data-tab="bar"][aria-selected="true"]) .shifthead h2::before { display: none; }
 .card.shift:has([data-tab="shift"][aria-selected="true"])    { --hero: url(img/summary.webp); }
@@ -581,3 +583,8 @@ ul.plain li .num { margin-left: auto; }
   .tabs button { padding: 7px 8px 7px 5px; gap: 4px; font-size: .93rem; }
   .tabs .count { padding: 0 5px; font-size: .75rem; }
 }
+
+/* gear app: the cycling snorkel rabbit of the old Control Board (SG rental) */
+.gahome h1 { display: flex; align-items: center; gap: 12px; }
+.gahome h1::before { content: ''; flex: none; width: 56px; height: 84px; background: url(img/gear.webp) center / contain no-repeat; animation: rt-hop 2.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .gahome h1::before { animation: none; } }
