@@ -3,6 +3,7 @@
 Interface de réception hors ligne de Rabbit Tree. Le staff travaille dans cette interface ; le Google Sheet reste la base de référence et le staff n'y a plus accès.
 
 - **Interface** : les fichiers à la racine (`index.html`, `js/`, …), servis par GitHub Pages. Elle garde tout dans le navigateur et envoie les opérations au Sheet en arrière-plan, même après une coupure Internet de plusieurs heures.
+- **Synchro Beds24** : `dev/server/31.Beds24_sync.gs` (paiements des chambres dans les deux sens, toutes les 5 min ; mode test par défaut, voir l'en-tête du fichier).
 - **Serveur** : `dev/server/30.UI_api.gs`, à coller dans le projet Apps Script lié au Sheet, publié en application web (exécuter en tant que : moi, accès : tout le monde).
 - **Tests** : dans `dev/`, `npm i` puis `node --test tests/*.test.js` (serveur sur un faux Sheet), `node tests/e2e.js` (shifts), `node tests/e2e-sales.js` (ventes) `node tests/e2e-expenses.js` (dépenses) `node tests/e2e-cash.js` (caisse) `node tests/e2e-partners.js` (partenaires) , `node tests/e2e-card.js` (terminal carte) et `node tests/e2e-restart.js` (coupure + redémarrage de l'ordinateur), dans Chrome avec coupure simulée.
 
