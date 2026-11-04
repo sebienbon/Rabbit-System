@@ -16,7 +16,17 @@
  *      lines) becomes one Room row "Unpaid".
  *   4. Booking cancelled: its Unpaid rows become "Cancelled" (amount 0). Paid rows are never
  *      touched: they are reported in B24_Control.
- *   Differences (amount changed in Beds24, overpaid booking, unknown payment method) go to B24_Control.
+ *   Differences (amount changed in Beds24, overpaid booking…) go to B24_Control.
+ *
+ * Payment modes = the list of Data activities, column Q (same list as the reception). In Beds24 the
+ * mode is the status of the payment line. A payment whose mode is not in the list is NOT imported:
+ * it waits in B24_Control until a manager picks the mode in column G (imported at the next run).
+ * Payment lines marked "Unpaid" in Beds24 are not payments: ignored, the amount stays due.
+ * Airbnb and Expedia Collect bookings are paid to the channel: what is due becomes a paid
+ * Transfer/Others line instead of an Unpaid one.
+ * A separate booking for a guest who is in the house (same email, or same name in any order) is an
+ * extension: it shows in the reception right away, under the same guest name. A doubtful match
+ * (one name in common, starting the day after) goes to B24_Control.
  *
  * Bar, laundry, tours… never go to Beds24: only category Room.
  *
@@ -63,7 +73,7 @@ var B24 = (function () {
   var lastTs_ = '';
   function newTs_() {
     var t = Utilities.formatDate(new Date(), TS_TZ, 'yyyyMMddHHmmssSSS');
-    if (t <= lastTs_) t = String(Number(lastTs_) + 1);
+    while (t <= lastTs_) { Utilities.sleep(2); t = Utilities.formatDate(new Date(), TS_TZ, 'yyyyMMddHHmmssSSS'); } // 17 digits: too long for Number + 1
     lastTs_ = t;
     return t;
   }
@@ -71,13 +81,34 @@ var B24 = (function () {
   function round_(n) { return Math.round(n * 100) / 100; }
   function safe_(v) { return typeof v === 'string' && /^[=+@]/.test(v) ? "'" + v : v; }
 
-  /** Payment method of a line typed in Beds24, from its description or status. */
+  /** Payment modes of the reception: Data activities, column Q (Unpaid excluded). */
+  var modesCache_ = null;
+  function modes_() {
+    if (modesCache_) return modesCache_;
+    var s = ss_().getSheetByName('Data activities');
+    var list = s ? s.getRange('Q2:Q20').getValues().map(function (r) { return String(r[0]).trim(); }).filter(String) : [];
+    modesCache_ = list.filter(function (p) { return key_(p) !== key_(PAY_UNPAID); });
+    return modesCache_;
+  }
+  function key_(t) { return String(t || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+  function validMode_(m) { return modes_().filter(function (p) { return key_(p) === key_(m); })[0] || null; }
+  /** Mode of a payment line typed in Beds24: its status (picked from Beds24's list), else its description. null = unknown. */
   function method_(item) {
-    var t = (String(item.description || '') + ' ' + String(item.status || '')).toLowerCase();
-    if (/cash|tunai/.test(t)) return { pay: 'Cash', sure: true };
-    if (/card|visa|master|debit|credit|edc|amex/.test(t)) return { pay: 'Credit / Debit Card', sure: true };
-    if (/transfer|bank|qris|wise|paypal|stripe|online|booking\.com|airbnb|hostelworld|expedia|agoda/.test(t)) return { pay: 'Transfer/Others', sure: true };
-    return { pay: 'Transfer/Others', sure: false };
+    var byStatus = validMode_(item.status);
+    if (byStatus) return byStatus;
+    var d = key_(String(item.description || '').replace(/^\[RT-[^\]]*\]/, ''));
+    if (!d) return null;
+    var hits = modes_().filter(function (p) { return d.indexOf(key_(p)) >= 0; });
+    return hits.length === 1 ? hits[0] : null;
+  }
+  function transferMode_() { return modes_().filter(function (p) { return /transfer/i.test(p); })[0] || 'Transfer/Others'; }
+  /** A payment line marked Unpaid in Beds24 is not a payment. */
+  function fakeUnpaid_(i) { return key_(i.status) === key_(PAY_UNPAID); }
+  /** Paid to the channel: Airbnb, Expedia Collect. */
+  function prepaid_(b) {
+    if (/airbnb/i.test(String(b.referer || ''))) return 'Airbnb';
+    if (/expedia\s*collect/i.test(String(b.rateDescription || ''))) return 'Expedia Collect';
+    return '';
   }
   /** Room name: start of the first room charge ("Tree House Wednesday, 4 November…"). */
   function roomName_(b) {
@@ -86,9 +117,28 @@ var B24 = (function () {
     var m = d.match(/^(.*?)\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/);
     return (m ? m[1] : d).trim() || 'Room';
   }
-  function guestName_(b) { return (String(b.guestFirstName || '') + ' ' + String(b.guestName || '')).replace(/\s+/g, ' ').trim() || ('Booking ' + b.bookId); }
+  function guestName_(b) {
+    if (b._guest) return b._guest; // extension: same name as the stay it extends
+    return guestName0_(b);
+  }
+  function guestName0_(b) { return (String(b.guestFirstName || '') + ' ' + String(b.guestName || '')).replace(/\s+/g, ' ').trim() || ('Booking ' + b.bookId);
+  }
+  function nameWords_(b) { return guestName0_(b).toLowerCase().split(/[^a-z\u00c0-\u024f]+/).filter(function (w) { return w.length >= 2; }).sort(); }
+  /** Is b a separate booking extending the stay of a guest in the house? */
+  function extensionOf_(b, inHouse) {
+    var email = String(b.guestEmail || '').trim().toLowerCase(), words = nameWords_(b), sure = null, maybe = null;
+    inHouse.forEach(function (h) {
+      if (h.bookId === b.bookId || sure) return;
+      var hEmail = String(h.guestEmail || '').trim().toLowerCase(), hw = nameWords_(h);
+      if ((email && email === hEmail) || (words.length && words.join(' ') === hw.join(' '))) { sure = h; return; }
+      var common = words.filter(function (w) { return w.length >= 3 && hw.indexOf(w) >= 0; }).length;
+      if (common && String(b.firstNight) === ymd_(addDays_(Utilities.parseDate(String(h.lastNight), TS_TZ, 'yyyy-MM-dd'), 1))) maybe = h;
+    });
+    return sure ? { host: sure, sure: true } : maybe ? { host: maybe, sure: false } : null;
+  }
   function charges_(b) { return round_((b.invoice || []).filter(function (i) { return Number(i.type) < 200; }).reduce(function (s, i) { return s + num_(i.qty) * num_(i.price); }, 0)); }
-  function payments_(b) { return (b.invoice || []).filter(function (i) { return Number(i.type) >= 200; }); }
+  function payments_(b) { return (b.invoice || []).filter(function (i) { return Number(i.type) >= 200 && !fakeUnpaid_(i); }); }
+  function fakeUnpaids_(b) { return (b.invoice || []).filter(function (i) { return Number(i.type) >= 200 && fakeUnpaid_(i); }); }
   function payAmount_(i) { return round_(-num_(i.qty) * num_(i.price)); }
   function cancelled_(b) { return String(b.status) === '0'; }
 
@@ -102,16 +152,13 @@ var B24 = (function () {
     if (data && data.error) throw new Error('Beds24 ' + fn + ': ' + (data.error || '') + ' ' + (data.errorCode || ''));
     return data;
   }
-  /** Bookings that arrived since the start date (at most 60 days back) and leave in the last 7 days or later. */
+  /** Bookings arriving from 60 days back to 30 days ahead that leave in the last 7 days or later. */
   function readBookings_(today) {
-    var from = new Date(Math.max(Utilities.parseDate(start_(), TS_TZ, 'yyyy-MM-dd').getTime(), addDays_(today, -60).getTime()));
-    var out = {}, depFrom = compact_(ymd_(addDays_(today, -7)));
-    for (var d = from; d <= today; d = addDays_(d, 7)) { // weekly slices: invoices come back only for < 100 bookings
-      var to = addDays_(d, 6); if (to > today) to = today;
+    var out = [], depFrom = compact_(ymd_(addDays_(today, -7))), end = addDays_(today, 30);
+    for (var d = addDays_(today, -60); d <= end; d = addDays_(d, 7)) { // weekly slices: invoices come back only for < 100 bookings
+      var to = addDays_(d, 6); if (to > end) to = end;
       var list = call_('getBookings', { arrivalFrom: compact_(ymd_(d)), arrivalTo: compact_(ymd_(to)), departureFrom: depFrom, includeInvoice: true });
-      (Array.isArray(list) ? list : []).forEach(function (b) {
-        if (String(b.firstNight) >= start_()) out[String(b.bookId)] = b;
-      });
+      if (Array.isArray(list)) out = out.concat(list);
     }
     return out;
   }
@@ -119,8 +166,8 @@ var B24 = (function () {
     var list = call_('getBookings', { bookId: String(bookId), includeInvoice: true });
     return Array.isArray(list) && list[0] ? list[0] : null;
   }
-  function addPayment_(bookId, amount, description) {
-    var r = call_('setBooking', { bookId: String(bookId), invoice: [{ description: description, status: '', qty: '-1', price: String(amount), vatRate: '0', type: '200' }] });
+  function addPayment_(bookId, amount, description, status) {
+    var r = call_('setBooking', { bookId: String(bookId), invoice: [{ description: description, status: status || '', qty: '-1', price: String(amount), vatRate: '0', type: '200' }] });
     if (!r || !r.success) throw new Error('Beds24 refused the payment for booking ' + bookId + ': ' + JSON.stringify(r).slice(0, 200));
   }
 
@@ -152,8 +199,19 @@ var B24 = (function () {
   function run_() {
     var live = live_(), plan = [], issues = [];
     var today = Utilities.parseDate(ymd_(new Date()), TS_TZ, 'yyyy-MM-dd'), todayStr = ymd_(new Date());
-    var books = readBookings_(today);
+    var all = readBookings_(today), books = {}, start = start_();
+    var inHouse = all.filter(function (b) { return !cancelled_(b) && String(b.firstNight) <= todayStr && String(b.lastNight) >= todayStr; });
+    all.forEach(function (b) {
+      var id = String(b.bookId), first = String(b.firstNight);
+      if (first < start) return;                       // before the start date: handled the old way
+      if (first <= todayStr) { books[id] = b; return; } // checked in
+      var ext = extensionOf_(b, inHouse);               // future booking: only an extension shows now
+      if (ext && ext.sure) { b._linked = true; b._guest = guestName0_(ext.host); books[id] = b; }
+      else if (ext) issues.push([id, guestName0_(b), 'Possible extension of ' + guestName0_(ext.host) + ' (' + ext.host.bookId + '): not shown yet', 'Starts ' + first + '. Same guest? Group the bookings in Beds24 or give the same email.', 'ext|' + id]);
+    });
+    var ctl = readControl_();
     var ent = readEntries_();
+    var imported = [];
     var newRows = [];
     function act(kind, b, detail) { plan.push([new Date(), kind, b ? String(b.bookId || b) : '', detail]); }
 
@@ -167,7 +225,7 @@ var B24 = (function () {
         if (!found) {
           act('Send payment to Beds24', b, l.guest + ' · ' + l.amount + ' · ' + l.pay + ' (row ' + l.rowNo + ')');
           if (!live) return;
-          addPayment_(l.bookId, l.amount, tag + ' ' + l.pay);
+          addPayment_(l.bookId, l.amount, tag + ' ' + l.pay, l.pay);
           b = readBooking_(l.bookId); books[l.bookId] = b;
           found = payments_(b).filter(function (i) { return String(i.description || '').indexOf(tag) === 0; })[0];
           if (!found) { issues.push([l.bookId, l.guest, 'Payment sent but not found back', tag]); return; }
@@ -211,31 +269,43 @@ var B24 = (function () {
           return;
         }
         if (knownIds[lineId]) return;
-        var how = method_(i);
-        if (!how.sure) issues.push([id, guest, 'Payment method not recognised, recorded as Transfer/Others', String(i.description || '') + ' · ' + amount]);
-        act('Import payment from Beds24', b, guest + ' · ' + room + ' · ' + amount + ' · ' + how.pay);
-        newRows.push({ bookId: id, lineId: lineId, guest: guest, room: room, amount: amount, pay: how.pay,
+        var k = 'mode|' + lineId, how = method_(i) || validMode_(ctl.chosen[k]);
+        if (!how) {
+          issues.push([id, guest, 'Payment mode missing: not imported. Pick the mode in column G', amount + ' on ' + String(i.createTime || '').slice(0, 10) + (i.status ? ' (status ' + i.status + ')' : ''), k, true]);
+          return;
+        }
+        if (ctl.rows[k]) imported.push(ctl.rows[k]);
+        act('Import payment from Beds24', b, guest + ' · ' + room + ' · ' + amount + ' · ' + how);
+        newRows.push({ bookId: id, lineId: lineId, guest: guest, room: room, amount: amount, pay: how,
           date: i.createTime ? Utilities.parseDate(String(i.createTime), 'UTC', 'yyyy-MM-dd HH:mm:ss') : new Date(),
-          comment: 'From Beds24: ' + String(i.description || '').slice(0, 80) });
+          comment: 'From Beds24' + (i.description ? ': ' + String(i.description).slice(0, 80) : '') });
         knownIds[lineId] = true;
       });
 
-      // 3. what is still owed, from the check-in day
-      if (String(b.firstNight) > todayStr) return;
+      fakeUnpaids_(b).forEach(function (i) {
+        issues.push([id, guest, 'Payment line marked Unpaid in Beds24: ignored, still due. Remove the Unpaid option from Beds24.', String(payAmount_(i)) + ' (line ' + i.invoiceId + ')', 'fake|' + i.invoiceId]);
+      });
+
+      // 3. what is still owed, from the check-in day (or now for an extension)
+      if (String(b.firstNight) > todayStr && !b._linked) return;
       var beds24Paid = payments_(b).reduce(function (s, i) { return s + payAmount_(i); }, 0);
       var notInBeds24 = mine.filter(function (l) { return l.pay !== PAY_CANCELLED && (l.pay === PAY_UNPAID || !l.lineId); })
         .reduce(function (s, l) { return s + l.amount; }, 0);
       var due = round_(charges_(b) - beds24Paid - notInBeds24);
-      if (due > 0.5) {
-        act('Create Unpaid line', b, guest + ' · ' + room + ' · ' + due);
-        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: PAY_UNPAID, date: new Date(), comment: 'From Beds24: still to pay' });
+      var channel = prepaid_(b);
+      if (due > 0.5 && channel) {
+        act('Record prepaid (' + channel + ')', b, guest + ' · ' + room + ' · ' + due + ' · ' + transferMode_());
+        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: transferMode_(), date: new Date(), comment: 'Paid to ' + channel });
+      } else if (due > 0.5) {
+        act('Create Unpaid line', b, guest + ' · ' + room + ' · ' + due + (b._linked ? ' (extension)' : ''));
+        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: PAY_UNPAID, date: new Date(), comment: 'From Beds24: still to pay' + (b._linked ? ' (extension, booking ' + id + ')' : '') });
       } else if (due < -0.5) {
         issues.push([id, guest, 'More paid than charged', String(-due)]);
       }
     });
 
     if (live) writeRows_(ent, newRows);
-    report_(live, plan, issues);
+    report_(live, plan, issues, ctl, live ? imported : []);
     return { live: live, actions: plan.length, issues: issues.length };
   }
 
@@ -271,22 +341,41 @@ var B24 = (function () {
     return 1;
   }
 
+  var CONTROL_HEADER = ['Found at', 'Booking', 'Guest', 'Problem', 'Detail', 'Key', 'Mode to use', 'Done'];
+  function control_() {
+    var ss = ss_(), c = ss.getSheetByName(CONTROL);
+    if (!c) { c = ss.insertSheet(CONTROL); c.getRange(1, 1, 1, CONTROL_HEADER.length).setValues([CONTROL_HEADER]); c.setFrozenRows(1); }
+    else if (String(c.getRange(1, 7).getValue()) === '') c.getRange(1, 1, 1, CONTROL_HEADER.length).setValues([CONTROL_HEADER]);
+    return c;
+  }
+  /** Problems already listed (by key), and the mode a manager picked for a payment. */
+  function readControl_() {
+    var c = control_(), rows = {}, chosen = {};
+    if (c.getLastRow() >= 2) c.getRange(2, 6, c.getLastRow() - 1, 3).getValues().forEach(function (r, i) {
+      var k = String(r[0]); if (!k) return;
+      rows[k] = i + 2;
+      if (String(r[1]).trim() && !String(r[2]).trim()) chosen[k] = String(r[1]).trim();
+    });
+    return { sheet: c, rows: rows, chosen: chosen };
+  }
   /** B24_DryRun lists what the last run did (or would do); B24_Control keeps each problem once. */
-  function report_(live, plan, issues) {
+  function report_(live, plan, issues, ctl, doneRows) {
     var ss = ss_();
     var dry = ss.getSheetByName(DRY) || ss.insertSheet(DRY);
     dry.clear();
     dry.getRange(1, 1, 1, 4).setValues([[live ? 'LIVE — last run' : 'TEST MODE — nothing written. Last run:', 'Action', 'Booking', 'Detail']]);
-    dry.getRange(1, 1).setNote(live ? '' : 'Run B24_goLive() when this list looks right.');
     if (plan.length) dry.getRange(2, 1, plan.length, 4).setValues(plan);
     else dry.getRange(2, 1, 1, 4).setValues([[new Date(), 'Nothing to do', '', '']]);
-    var c = ss.getSheetByName(CONTROL);
-    if (!c) { c = ss.insertSheet(CONTROL); c.getRange(1, 1, 1, 6).setValues([['Found at', 'Booking', 'Guest', 'Problem', 'Detail', 'Key']]); c.setFrozenRows(1); }
-    var keys = {};
-    if (c.getLastRow() >= 2) c.getRange(2, 6, c.getLastRow() - 1, 1).getValues().forEach(function (r) { keys[String(r[0])] = true; });
-    var add = issues.map(function (x) { return [new Date(), x[0], x[1], x[2], x[3], x[0] + '|' + x[2] + '|' + x[3]]; })
-      .filter(function (r) { if (keys[r[5]]) return false; keys[r[5]] = true; return true; });
-    if (add.length) c.getRange(c.getLastRow() + 1, 1, add.length, 6).setValues(add);
+    var c = ctl.sheet, seen = {};
+    var add = issues.map(function (x) { return { row: [new Date(), x[0], x[1], x[2], x[3], x[4] || (x[0] + '|' + x[2] + '|' + x[3]), '', ''], mode: !!x[5] }; })
+      .filter(function (r) { var k = r.row[5]; if (ctl.rows[k] || seen[k]) return false; seen[k] = true; return true; });
+    if (add.length) {
+      var at = c.getLastRow() + 1;
+      c.getRange(at, 1, add.length, CONTROL_HEADER.length).setValues(add.map(function (r) { return r.row; }));
+      var rule = SpreadsheetApp.newDataValidation().requireValueInList(modes_(), true).setAllowInvalid(false).build();
+      add.forEach(function (r, i) { if (r.mode) c.getRange(at + i, 7).setDataValidation(rule).setBackground('#FFF4CC'); });
+    }
+    (doneRows || []).forEach(function (n) { c.getRange(n, 8).setValue('Imported ' + ymd_(new Date())); c.getRange(n, 7).setBackground(null); });
   }
 
   // ---------- setup ----------
