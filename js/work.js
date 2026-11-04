@@ -452,11 +452,28 @@ function bindLineActions(root, d) {
 }
 
 // ---------------------------------------------------------------- guest bills
+// Small "?" that shows the Beds24 rules on hover, focus or tap.
+function helpTip(label, items) {
+  return `<span class="help" tabindex="0" role="button" aria-label="${esc(label)}">?<span class="help-pop" role="tooltip"><b>${esc(label)}</b><ul>${items.map(t => `<li>${t}</li>`).join('')}</ul></span></span>`;
+}
+const BEDS24_RULES = [
+  '<b>New night or extension</b> → always in Beds24.',
+  '<b>Guest pays right away</b> → record the payment in Beds24 too, with how they paid.',
+  '<b>Guest pays later</b> → record it here only, never in Beds24.',
+  'Room nights not paid appear here as <b>Unpaid</b> from the check-in day.',
+  '<b>Never change a payment in Beds24.</b> A mistake is fixed here, with a correction.'
+];
+const PAY_RULES = [
+  'Tick what the guest pays now, choose how, then <b>Record payment</b>.',
+  'Room payments go to Beds24 automatically. Nothing to do there.',
+  '<b>Never change or delete them in Beds24.</b> Fix mistakes here.'
+];
 function renderBills(root, d) {
   const { ui } = d;
   const guest = ui.billGuest;
   if (!guest) {
     root.innerHTML = `<section class="card">
+      <div class="helprow">Rules with Beds24 ${helpTip('Rules with Beds24', BEDS24_RULES)}</div>
       <label class="field"><span>Find a guest</span><input id="billQ" type="search" autocomplete="off" placeholder="Name" value="${esc(ui.billQuery || '')}"></label>
       <div id="billList"></div></section>`;
     const listEl = root.querySelector('#billList');
@@ -502,7 +519,7 @@ function renderBill(root, d, guest) {
     <h2>${esc(guest)}</h2>
     ${unpaid.length && !cashRight(d.user, d.shift) ? '<p class="muted">Only the person on shift or a manager can record a payment.</p>' : ''}
     ${unpaid.length && cashRight(d.user, d.shift) ? `<form id="payForm">
-      <h3 class="sub">To pay</h3>
+      <h3 class="sub">To pay ${helpTip('How to record a payment', PAY_RULES)}</h3>
       <ul class="lines">${unpaid.map(l => `<li class="line sel"><label class="check"><input type="checkbox" data-sel="${esc(l.ts)}"${ui.billSel.has(l.ts) ? ' checked' : ''}>
         <span class="what"><b>${esc(l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${lineDay(l.ts)} ${lineTime(l.ts)}</span></span></label>
         <span class="amt num">${money(l.total)}</span>${l.pending ? '<span class="badge wait">Waiting</span>' : ''}</li>`).join('')}</ul>

@@ -608,3 +608,14 @@ button.gawa { width: 100%; }
 .copybox { width: 100%; font: 12px/1.4 ui-monospace, monospace; margin-top: 6px; }
 .sync .clockwarn { flex-basis: 100%; }
 .gaattn h2 { color: var(--bad); }
+
+/* "?" help bubble (Guest bills): opens on hover, keyboard focus or tap */
+.helprow { display: flex; align-items: center; justify-content: flex-end; gap: 8px; font-size: .85rem; color: var(--ink-soft); margin-bottom: 6px; }
+.help { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-bg); color: var(--accent); border: 1px solid var(--line); font: 800 .8rem/1 var(--sans); cursor: help; }
+.help:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.help-pop { display: none; position: absolute; top: calc(100% + 8px); z-index: 50; width: max-content; max-width: min(320px, 80vw); padding: 10px 12px; background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow-up); font: 400 .85rem/1.45 var(--sans); text-align: left; white-space: normal; }
+.helprow .help-pop { right: -4px; }
+h3.sub .help-pop { left: -4px; }
+.help-pop ul { margin: 6px 0 0; padding-left: 18px; }
+.help-pop li { margin: 3px 0; }
+.help:hover .help-pop, .help:focus .help-pop { display: block; }
