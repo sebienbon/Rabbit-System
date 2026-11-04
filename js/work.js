@@ -458,8 +458,8 @@ function helpTip(label, items) {
 }
 const BEDS24_RULES = [
   '<b>New night or extension</b> → always in Beds24.',
-  '<b>Guest pays right away</b> → record the payment in Beds24 too, with how they paid.',
-  '<b>Guest pays later</b> → record it here only, never in Beds24.',
+  '<b>Guest pays right away</b> (new night or extension) → record the payment in Beds24 only, and pick how they paid. It comes here by itself.',
+  '<b>Guest pays later</b> → record it here only (Guest bills). It goes to Beds24 by itself.',
   'Room nights not paid appear here as <b>Unpaid</b> from the check-in day.',
   '<b>Walk-in guest</b> (food, sunset boat…) not in Beds24 → <b>+ New guest</b>, then sell in Sell.',
   'Just changed something in Beds24? Press <b>Refresh</b> at the top.',
@@ -467,7 +467,7 @@ const BEDS24_RULES = [
 ];
 const PAY_RULES = [
   'Tick what the guest pays now, choose how, then <b>Record payment</b>.',
-  'Do not record it again in Beds24.',
+  'Room payments go to Beds24 by themselves: never record them in Beds24 too.',
   '<b>Never change or delete them in Beds24.</b> Fix mistakes here.'
 ];
 function renderBills(root, d) {
