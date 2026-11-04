@@ -135,11 +135,12 @@ async function doPush() {
   }
 }
 
-async function doPull() {
+async function doPull(opts = {}) {
   const token = (await db.get('deviceToken')) || await reconnect((await db.get('currentUser') || {}).username);
   if (!token) return;
   try {
-    const r = await api('pull', { token });
+    const r = await api('pull', { token, beds24: !!opts.beds24 }, opts.beds24 ? 90000 : undefined);
+    lastBeds24 = r.beds24 || null;
     const v = (r.shift && r.shift.v) || 0;
     const applied = await db.all('applied');
     const writes = [
@@ -186,6 +187,14 @@ export async function sheetReachable(timeoutMs = 8000) {
   try { await api('ping', {}, timeoutMs); return true; } catch (e) { return e instanceof ApiError && !e.network; }
 }
 export const pullNow = () => serial(doPull);
+/** Refresh button: send what is waiting, ask the server to read Beds24 now, then reload everything. */
+let lastBeds24 = null;
+export async function refreshNow() {
+  emit({ state: 'sending', message: '' });
+  await serial(doPush);
+  await serial(() => doPull({ beds24: true }));
+  return lastBeds24;
+}
 
 function tick() {
   const now = Date.now();

@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import { CONFIG } from './config.js';
 import { login, logout, currentUser, isRegistered, outboxOwners, cleanupTokens } from './auth.js';
-import { startSync, onStatus, pushNow, pullNow, dismissRejected, waitingCount, sheetReachable, warnOtherOutboxes, status as syncStatus, opDetails, copyText, CLOCK_WARN_MS } from './sync.js';
+import { startSync, onStatus, pushNow, pullNow, refreshNow, dismissRejected, waitingCount, sheetReachable, warnOtherOutboxes, status as syncStatus, opDetails, copyText, CLOCK_WARN_MS } from './sync.js';
 import { currentShift, cashInBoxBeforeOpening, expectedCash, cashMovements, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
 import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy, partnerBusy, cardBusy } from './work.js';
 import { barBusy } from './bar.js'; // TEMPORARY (bar cash-out)
@@ -389,8 +389,23 @@ async function renderNow() {
     ui.notice = 'Gear staff accounts use the gear app (gear.html), not the reception.';
     await renderLogin(); return;
   }
-  $('#who').innerHTML = `<span>${esc(ui.user.name)}${ui.user.role !== 'staff' ? ` <em>${esc(ui.user.role)}</em>` : ''}</span>
+  $('#who').innerHTML = `<button type="button" class="refresh" id="refreshBtn" title="Refresh now: Beds24 and the sheet" aria-label="Refresh now">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
+    <span>${esc(ui.user.name)}${ui.user.role !== 'staff' ? ` <em>${esc(ui.user.role)}</em>` : ''}</span>
     <button class="ghost small" id="logout">Log out</button>`;
+  $('#refreshBtn').onclick = async () => {
+    const b = $('#refreshBtn');
+    if (b.classList.contains('spin')) return;
+    b.classList.add('spin'); b.disabled = true;
+    try {
+      const r = await refreshNow();
+      if (r && r.error) ui.notice = `Sheet refreshed, but Beds24 could not be read: ${r.error}`;
+      else if (r && r.live === false) ui.notice = 'Refreshed. Beds24 sync is still in test mode: nothing is written yet.';
+      else ui.notice = 'Refreshed: Beds24 and the sheet are up to date.';
+    } catch { ui.notice = 'Could not refresh now. It retries automatically.'; }
+    b.classList.remove('spin'); b.disabled = false;
+    render();
+  };
   $('#logout').onclick = async () => {
     $('#logout').disabled = true;
     await pushNow(); // send what is waiting first

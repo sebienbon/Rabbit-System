@@ -461,6 +461,8 @@ const BEDS24_RULES = [
   '<b>Guest pays right away</b> → record the payment in Beds24 too, with how they paid.',
   '<b>Guest pays later</b> → record it here only, never in Beds24.',
   'Room nights not paid appear here as <b>Unpaid</b> from the check-in day.',
+  '<b>Walk-in guest</b> (food, sunset boat…) not in Beds24 → <b>+ New guest</b>, then sell in Sell.',
+  'Just changed something in Beds24? Press <b>Refresh</b> at the top.',
   '<b>Never change a payment in Beds24.</b> A mistake is fixed here, with a correction.'
 ];
 const PAY_RULES = [
@@ -473,13 +475,39 @@ function renderBills(root, d) {
   const guest = ui.billGuest;
   if (!guest) {
     root.innerHTML = `<section class="card">
-      <div class="helprow">Rules with Beds24 ${helpTip('Rules with Beds24', BEDS24_RULES)}</div>
+      <div class="helprow"><button type="button" class="ghost small" data-newguest aria-expanded="${!!ui.newGuest}">+ New guest</button><span class="grow"></span>Rules with Beds24 ${helpTip('Rules with Beds24', BEDS24_RULES)}</div>
+      ${ui.newGuest ? `<form id="newGuestForm" class="inline newguestform">
+        <label class="field"><span>New guest (not in Beds24: walk-in, food, sunset boat…)</span><input id="ngName" autocomplete="off" maxlength="60" placeholder="First and last name" value="${esc(ui.newGuestName || '')}"></label>
+        <div class="row"><button type="submit" class="primary small">Add guest</button><button type="button" class="ghost small" data-ngcancel>Cancel</button></div>
+        <p class="error" role="alert"></p></form>` : ''}
       <label class="field"><span>Find a guest</span><input id="billQ" type="search" autocomplete="off" placeholder="Name" value="${esc(ui.billQuery || '')}"></label>
       <div id="billList"></div></section>`;
     const listEl = root.querySelector('#billList');
     const draw = () => { listEl.innerHTML = billList(d); };
     root.querySelector('#billQ').addEventListener('input', e => { ui.billQuery = e.target.value; draw(); });
-    root.addEventListener('click', e => { const b = e.target.closest('[data-open]'); if (b) { ui.billGuest = b.dataset.open; ui.billSel = null; ui.billPay = null; d.render(); } });
+    root.addEventListener('click', e => {
+      const b = e.target.closest('[data-open]');
+      if (b) { ui.billGuest = b.dataset.open; ui.billSel = null; ui.billPay = null; d.render(); return; }
+      if (e.target.closest('[data-newguest]')) { ui.newGuest = !ui.newGuest; ui.newGuestName = ''; d.render(); if (ui.newGuest) root.querySelector('#ngName')?.focus(); return; }
+      if (e.target.closest('[data-ngcancel]')) { ui.newGuest = false; ui.newGuestName = ''; d.render(); }
+    });
+    root.querySelector('#ngName')?.addEventListener('input', e => { ui.newGuestName = e.target.value; });
+    root.querySelector('#newGuestForm')?.addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = e.target.querySelector('.error');
+      const name = (ui.newGuestName || '').replace(/\s+/g, ' ').trim();
+      if (name.length < 2) { err.textContent = 'Type the guest name.'; return; }
+      const same = d.guests.find(g => norm(g) === norm(name));
+      ui.newGuest = false; ui.newGuestName = '';
+      if (same) { ui.billQuery = same; ui.notice = `${same} is already in the list.`; d.render(); return; }
+      e.target.querySelector('button[type=submit]').disabled = true;
+      await enqueue('guest_add', { name });
+      const known = (await db.get('guests')) || [];
+      if (!known.includes(name)) await db.set('guests', [...known, name].sort((a, b) => a.localeCompare(b)));
+      ui.billQuery = name;
+      ui.notice = `Guest added: ${name}. Sell to them in Sell; what they don't pay shows here.`;
+      d.render();
+    });
     draw();
     return;
   }

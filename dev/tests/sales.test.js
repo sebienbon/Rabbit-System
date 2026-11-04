@@ -714,3 +714,24 @@ test('TEMPORARY bar cash-out: one Entries Manual row like the old sheet, not in 
   const c = push(env, ayu, op('shift_close', { shiftId: id, cashCounted: 100000, expectedCash: 100000 }));
   assert.strictEqual(c.results[0].difference, 0, 'the reception box is unchanged');
 });
+
+test('guest_add: a walk-in guest goes to New guest (C and F) once, then shows in the guest list', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'); openShift(env, ayu);
+  const add = name => ({ id: 'ng-' + name + Math.random(), type: 'guest_add', at: new Date().toISOString(), payload: { name } });
+  let r = push(env, ayu, add('Maya Walkin'));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  const rows = () => env.book['New guest'].data.filter(x => x[2] === 'Maya Walkin');
+  assert.strictEqual(rows().length, 1); assert.strictEqual(rows()[0][5], 'Maya Walkin');
+  push(env, ayu, add('  maya   walkin '));
+  assert.strictEqual(env.book['New guest'].data.filter(x => String(x[2]).toLowerCase().replace(/\s+/g, ' ').trim() === 'maya walkin').length, 1, 'added only once');
+  assert.ok(env.call({ action: 'pull', token: ayu }).guests.includes('Maya Walkin'));
+  r = push(env, ayu, add(''));
+  assert.strictEqual(r.results[0].status, 'rejected');
+});
+
+test('pull with beds24: runs the Beds24 sync first when it is installed, never fails the pull', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  assert.strictEqual(env.call({ action: 'pull', token: ayu, beds24: true }).beds24, null, 'no sync installed: nothing');
+});

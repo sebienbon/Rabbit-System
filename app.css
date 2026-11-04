@@ -619,3 +619,14 @@ h3.sub .help-pop { left: -4px; }
 .help-pop ul { margin: 6px 0 0; padding-left: 18px; }
 .help-pop li { margin: 3px 0; }
 .help:hover .help-pop, .help:focus .help-pop { display: block; }
+
+/* Refresh button in the header (every screen) */
+.who .refresh { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.45); background: rgba(255,255,255,.14); color: #fff; font: 700 .85rem var(--sans); cursor: pointer; }
+.who .refresh:hover { background: rgba(255,255,255,.24); }
+.who .refresh:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.who .refresh:disabled { opacity: .75; cursor: progress; }
+.who .refresh.spin svg { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 560px) { .who .refresh span { display: none; } }
+.helprow .grow { flex: 1; }
+.newguestform { margin: 4px 0 14px; }

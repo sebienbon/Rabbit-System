@@ -300,6 +300,11 @@ var UIAPI = (function () {
       return { me: publicUser_(me), registered: !!sess.reg, serverTime: new Date().toISOString(), shift: { v: version_() },
         gear: ss_().getSheetByName(SHEETS.sg) ? gearForStaffApp_(gearState_(), null) : null };
     }
+    // Refresh button: run the Beds24 sync first, so new nights and payments are in this answer.
+    var beds24 = null;
+    if (body.beds24 && typeof B24 !== 'undefined') {
+      try { beds24 = B24.run(); } catch (e) { beds24 = { error: String(e && e.message || e).slice(0, 200) }; }
+    }
     var ent = ss_().getSheetByName(SHEETS.entries) ? entries_() : null; // read once for the whole answer
     var out = {
       me: publicUser_(me),
@@ -314,7 +319,8 @@ var UIAPI = (function () {
       partners: readPartners_(ent),
       settlement: lastSettlement_(),
       gear: ss_().getSheetByName(SHEETS.sg) ? gearForReception_(gearState_(), ent) : null,
-      bar: readBarCashouts_() // TEMPORARY (bar cash-out): remove with the BAR CASH-OUT block below
+      bar: readBarCashouts_(), // TEMPORARY (bar cash-out): remove with the BAR CASH-OUT block below
+      beds24: beds24
     };
     if (sess.reg) {
       // Hashes let the registered reception computer check passwords during an outage: staff only.
@@ -1336,6 +1342,19 @@ var UIAPI = (function () {
      * A guest pays lines left Unpaid: payment type, author and timestamp change, as in the
      * old billing dialog. Each item can be resumed if an earlier attempt stopped half-way.
      */
+    /** A guest who is not in Beds24 (walk-in for food, a sunset boat…): added to New guest (C and F), like the old dialog. */
+    guest_add: function (op, me) {
+      var name = text_((op.payload || {}).name, 60, 'Name');
+      if (!name) throw apiError_('bad_payload', 'Type the guest name');
+      var ng = sheet_(SHEETS.newGuest);
+      var last = lastRowIn_(ng, 1, 6);
+      var key = function (v) { return String(v).replace(/^'/, '').replace(/\s+/g, ' ').trim().toLowerCase(); };
+      var known = last >= 1 && ng.getRange(1, 3, last, 4).getValues().some(function (r) { return key(r[0]) === key(name) || key(r[3]) === key(name); });
+      if (known) return { already: true };
+      writes_++;
+      ng.getRange(last + 1, 3, 1, 4).setValues([[name, new Date(), '', name]]);
+      return {};
+    },
     settle: function (op, me) {
       var p = op.payload || {};
       var at = parseAt_(op.at);
