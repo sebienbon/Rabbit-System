@@ -4,7 +4,7 @@
 // Cache first, from a set of files fixed per VERSION: the app opens instantly even
 // when the router is up but the Internet is not, and never mixes old and new files.
 // To ship an update: change VERSION. The page reloads itself once nobody is typing.
-const VERSION = 'reception-2026-11-04d-refresh-newguest';
+const VERSION = 'reception-2026-11-04e-main-sheet';
 const SHELL = [
   './', './index.html', './app.css', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './js/app.js', './js/db.js', './js/api.js', './js/auth.js', './js/sync.js', './js/shift.js', './js/config.js',

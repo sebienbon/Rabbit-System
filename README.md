@@ -30,4 +30,4 @@ Interface de réception hors ligne de Rabbit Tree. Le staff travaille dans cette
 ## Publier une mise à jour
 Changer `VERSION` dans `sw.js`. L'ordinateur de réception se recharge tout seul dès que personne n'est en train de saisir.
 
-Actuellement branché sur la **copie de test** du Sheet.
+Branché sur le **vrai Sheet** « Reception - RABBIT TREE » depuis le 04/11/2026 (synchro Beds24 en mode test jusqu'à `B24_goLive`).

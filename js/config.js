@@ -1,8 +1,8 @@
 // Address of the Apps Script Web App (Deploy > Web app > URL ending in /exec).
-// Points at the TEST copy of the spreadsheet ("Claude copy Reception - RABBIT TREE")
-// until we switch to the real one.
+// Points at the REAL spreadsheet "Reception - RABBIT TREE" (live since 04/11/2026).
+// Test copy ("Claude copy Reception - RABBIT TREE"): AKfycbxjw8ldfWzInmkTP2K1c-OnyfkmA_zW2ekoEEBos1GTcxmMhgCBCUckXTt4oV1mconK
 export const CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbxjw8ldfWzInmkTP2K1c-OnyfkmA_zW2ekoEEBos1GTcxmMhgCBCUckXTt4oV1mconK/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwtm3tI5vEvnxyzSFIsvcd2lJ7pQ3scoR_LweGWFXF3wJc4gf3Es9FcdXmE4K7yxNJKoA/exec',
   PUSH_EVERY_MS: 15000,      // send waiting operations
   PULL_EVERY_MS: 2 * 60000,  // refresh catalog, guests, users, gear (the gear staff's work shows within 2 min)
 };
