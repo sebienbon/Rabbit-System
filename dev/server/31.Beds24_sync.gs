@@ -205,8 +205,8 @@ var B24 = (function () {
       // 2. Beds24 → Entries, and checks on lines sent from the reception
       payments_(b).forEach(function (i) {
         var lineId = String(i.invoiceId), amount = payAmount_(i), m = String(i.description || '').match(TAG);
-        if (m) {
-          var src = byTs[m[1]];
+        if (/^\[RT-/.test(String(i.description || ''))) { // written by the reception (or a test): never imported
+          var src = m ? byTs[m[1]] : null;
           if (src && Math.abs(src.amount - amount) > 0.5) issues.push([id, guest, 'Amount changed in Beds24', 'Reception ' + src.amount + ' / Beds24 ' + amount + ' (line ' + lineId + ')']);
           return;
         }
