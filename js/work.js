@@ -465,7 +465,7 @@ const BEDS24_RULES = [
 ];
 const PAY_RULES = [
   'Tick what the guest pays now, choose how, then <b>Record payment</b>.',
-  'Room payments go to Beds24 automatically. Nothing to do there.',
+  'Do not record it again in Beds24.',
   '<b>Never change or delete them in Beds24.</b> Fix mistakes here.'
 ];
 function renderBills(root, d) {
