@@ -12,18 +12,24 @@ const RECENT = tsAt(NOW - 2 * 86400000);  // a paid line two days ago
 
 const ENTRIES_HEAD = ['Date', 'Category', 'Sub-category', 'object', 'Qty', 'Auto price per unit', 'Auto price', 'Real price (if different)', 'Author', 'Theorical cost per unit', 'Theorical cost', 'Real cost (if different)', 'Guest', 'Payment Type', 'Time stamp', 'month correction', 'Comment', 'Pouchnation time', 'Status', 'Seller'];
 const MANUAL_HEAD = ['', 'Category', 'Sub-category', 'object', 'Qty', 'Auto price per unit', 'Auto price', 'Real price (if different)', 'Author', 'Theorical cost per unit', 'Theorical cost', 'Real cost (if different)', 'Guest', 'Payment Type', 'Author', 'Comment', 'Time stamp', 'Seller'];
+// Same columns as the live tab, A..X: ... Q Payment type, R Commission, S Rooms, T Payment type2, U Room Ids,
+// V Commission exceptions, W Partner lines, X Expense buttons.
+const DA_HEAD = ['Activity', 'Selling Price', 'Purchase prices', '', '', '', '', '', 'Category', 'Sub-category - Income', 'Staff', 'Service', 'Transport', 'Tour', 'Other', 'Paid', 'Payment type',
+  'Commission', 'Rooms', 'Payment type2', 'Room Ids', 'Commission exceptions', 'Partner lines', 'Expense buttons'];
 const DA = [
-  ['Activity', 'Selling Price', 'Purchase prices', '', '', '', '', '', 'Category', 'Sub-category - Income', 'Staff', 'Service', 'Transport', 'Tour', 'Other', 'Paid', 'Payment type'],
-  ['Snorkeling Mask', '30,000Rp', '', '', '', '', '', '', 'Income', 'Room', 'Boss', 'Snorkeling Mask', '-Shuttle Bangsal / Kuta', '-Horse Riding', 'Rooms', 'To agent', 'Cash'],
-  ['Towel', '50,000Rp', '', '', '', '', '', '', 'Expense', 'Bar', 'Food', 'Towel', '', '', 'Restaurant', '', 'Credit / Debit Card'],
-  ['Laundry', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Laundry', '', '', 'other', '', 'Transfer/Others'],
-  ['-Horse Riding', '400,000Rp', '350,000Rp', '', '', '', '', '', '', '', '', 'Bar', '', '', '', '', 'Unpaid'],
-  ['-Shuttle Bangsal / Kuta', '160,000Rp', '90,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Paid to Partner'],
+  DA_HEAD,
+  ['Snorkeling Mask', '30,000Rp', '', '', '', '', '', '', 'Income', 'Room', 'Boss', 'Snorkeling Mask', '-Shuttle Bangsal / Kuta', '-Horse Riding', 'Rooms', 'To agent', 'Cash',
+    'Boss', 'Double inside building', 'Cash', 353330, '-Gili T Night Boat', 'Payment to Partner', 'Restaurant'],
+  ['Towel', '50,000Rp', '', '', '', '', '', '', 'Expense', 'Bar', 'Food', 'Towel', '', '', 'Restaurant', '', 'Credit / Debit Card',
+    'Banu', 'Tree House', 'Credit / Debit Card', 460595, '', 'Payment From Partner', 'Laundry'],
+  ['Laundry', '30,000Rp', '', '', '', '', '', '', '', '', '', 'Laundry', '', '', 'other', '', 'Transfer/Others', '', '', 'Transfer/Others', '', '', '', 'other'],
+  ['-Horse Riding', '400,000Rp', '350,000Rp', '', '', '', '', '', '', '', '', 'Bar', '', '', '', '', 'Unpaid', '', '', 'Extern cash', '', '', '', 'Not listed in L..O'],
+  ['-Shuttle Bangsal / Kuta', '160,000Rp', '90,000Rp', '', '', '', '', '', '', '', '', '', '', '', '', '', 'Paid to Partner', '', '', 'Unpaid'],
   ['Bar'],
   ['Laundry', '99,000Rp'], // duplicate name: the first price wins, like the old dialog
 ];
 
-function freshEnv() {
+function freshEnv(da = DA) {
   const d = new Date(NOW - 40 * 86400000);
   const entries = [ENTRIES_HEAD,
     [d, 'Income', 'Service', 'Towel', 1, 50000, 50000, 50000, 'r2@x', '', 0, 0, 'Old Guest', 'Unpaid', OLD, 'Past', ''],
@@ -37,7 +43,7 @@ function freshEnv() {
     'Cashouts&Cor': [['Column 1', 'Time ', 'Cashout', 'Difference', 'Cash in box', 'Change suply', 'Author', 'Comment', 'Type'], ['01/11/2026', '15:00:08', 0, 0, 100000, '', 'r1@x', '', 'Closing']],
     'Entries': entries,
     'Entries Manual': manual,
-    'Data activities': DA,
+    'Data activities': da.map(r => r.slice()),
     '24datafeed': [['Guest Name', 'First Name', 'Full'], ['E', 'A', 'Alice Example']],
     'New guest': [['', '', '', '', '', 'Bob Sample']],
   } });
@@ -747,4 +753,39 @@ test('sale writes Seller (T) = author email for commissions; an expense does not
   const ex = op('expense', { ts: newTs(), category: 'Other', object: 'Restaurant', amount: 20000, payment: 'Cash', comment: 'x' });
   assert.strictEqual(push(env, t, ex).results[0].status, 'applied', 'expense applied');
   assert.ok(!findE(env, ex.payload.ts)[19], 'no Seller on an expense');
+});
+
+test('pull: expense buttons from the sheet (Data activities "Expense buttons"), partner words from "Partner lines"', () => {
+  const env = freshEnv();
+  const p = env.call({ action: 'pull', token: login(env, 'ayu') });
+  assert.deepStrictEqual(p.expenses, [{ object: 'Restaurant', category: 'Other' }, { object: 'Laundry', category: 'Service' }, { object: 'other', category: 'Other' }],
+    'in sheet order; an item not listed in L..O is left out (it could not be written)');
+  assert.deepStrictEqual(p.partnerLabels, { to: 'Payment to Partner', from: 'Payment From Partner' });
+  assert.ok(!p.payments.includes('Payment to Partner') && !p.payments.includes('Payment From Partner'), 'not in the payment picker');
+  // Without those columns: no list (the app keeps its own), the usual words.
+  const bare = freshEnv(DA.map(r => r.slice(0, 17)));
+  const q = bare.call({ action: 'pull', token: login(bare, 'ayu') });
+  assert.deepStrictEqual(q.expenses, []);
+  assert.deepStrictEqual(q.partnerLabels, { to: 'Payment to Partner', from: 'Payment From Partner' });
+});
+
+test('Data activities lists are read to the last row: payment types, expense items, partner products, expense buttons', () => {
+  const da = DA.map(r => r.slice());
+  const put = (row, col, v) => { while (da.length < row) da.push([]); const r = da[row - 1]; while (r.length < col) r.push(''); r[col - 1] = v; };
+  put(30, 17, 'QRIS');                 // Q30: a payment type far below Q20
+  put(45, 15, 'Pajak');                // O45: an expense item below row 30
+  put(45, 24, 'Pajak');                // X45: and its button
+  put(70, 14, '-Far Tour');            // N70: a partner product below row 50
+  put(70, 1, '-Far Tour'); put(70, 2, '100,000Rp'); put(70, 3, '60,000Rp');
+  const env = freshEnv(da);
+  const t = login(env, 'ayu');
+  const p = env.call({ action: 'pull', token: t });
+  assert.ok(p.payments.includes('QRIS'), JSON.stringify(p.payments));
+  assert.deepStrictEqual(p.expenses.map(x => x.object), ['Restaurant', 'Laundry', 'other', 'Pajak']);
+  assert.ok(p.partners.items.some(it => it.object === '-Far Tour' && it.group === 'Tour'), 'partner product far down');
+  openShift(env, t);
+  const ts = newTs();
+  assert.strictEqual(push(env, t, op('expense', { ts, object: 'Pajak', amount: 10000, payment: 'QRIS' })).results[0].status, 'applied');
+  const r = findE(env, ts);
+  assert.deepStrictEqual([r[1], r[2], r[3], r[11], r[13]], ['Expense', 'Other', 'Pajak', 10000, 'QRIS']);
 });

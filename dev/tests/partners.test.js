@@ -27,7 +27,7 @@ const SALES = [
   [T(5), 'Towel', 1, 50000, 0, 0, 'Dee', 'Cash', '', ''],
 ];
 
-function freshEnv() {
+function freshEnv(da = DA) {
   const entries = [ENTRIES_HEAD], manual = [MANUAL_HEAD];
   for (const [ts, obj, q, price, cost, real, guest, pay, st, comment] of SALES) {
     entries.push([day, 'Income', 'Tour', obj, q, price / q, price, price, 'r2@x', cost / q, cost, real, guest, pay, ts, '', comment, '', st]);
@@ -37,7 +37,7 @@ function freshEnv() {
   for (let i = 0; i < 20; i++) manual.push(['', '', '', '', '', '=f', '=g', '', '', '=j', '=k']);
   const env = makeEnv({ sheets: {
     'Cashouts&Cor': [['Column 1', 'Time ', 'Cashout', 'Difference', 'Cash in box', 'Change suply', 'Author', 'Comment', 'Type'], ['01/11/2026', '15:00:08', 0, 0, 1000000, '', 'r1@x', '', 'Closing']],
-    'Entries': entries, 'Entries Manual': manual, 'Data activities': DA,
+    'Entries': entries, 'Entries Manual': manual, 'Data activities': da.map(r => r.slice()),
     '24datafeed': [['Guest Name', 'First Name', 'Full']], 'New guest': [['', '', '', '', '', 'Bob Sample']],
     'Settlements': [['Date', 'Time', 'Author', 'Time stamp', 'Difference', 'Total Settlement MIN 3%', 'Total Card Transaction', 'Total Local Card', 'Comment:', 'TOTAL SETTLEMENT', 'AFTER 3% SETTLEMENT 1', 'AFTER 3% SETTLEMENT 2', 'M', 'N'],
       [day, '14:57:56', 'r1@x', Number(T(0).slice(0, 14) + '000'), 0, 0, 0, '', 'Comment:', 0, 0, 0]],
@@ -282,4 +282,24 @@ test('S15: settling a bill writes column S only on the rows of that bill', () =>
   const rowNo = t => E.data.findIndex(r => r[14] === t) + 1;
   assert.deepStrictEqual(writes.sort((a, b) => a - b), [rowNo(T(1)), rowNo(T(2)), rowNo(ts)].sort((a, b) => a - b));
   assert.strictEqual(rowE(env, T(3))[18], 'B_01/10-10:00', 'other bill untouched');
+});
+
+test('settle: the words of Entries M come from Data activities "Partner lines" (W2 we pay, W3 they pay); old words still count as payment rows', () => {
+  const da = DA.map(r => r.slice());
+  const put = (row, col, v) => { const r = da[row - 1]; while (r.length < col) r.push(''); r[col - 1] = v; };
+  put(1, 23, 'Partner lines'); put(2, 23, 'Paid to partner (bill)'); put(3, 23, 'Received from partner (bill)');
+  const env = freshEnv(da);
+  const boss = login(env, 'boss');
+  assert.deepStrictEqual(env.call({ action: 'pull', token: boss }).partnerLabels, { to: 'Paid to partner (bill)', from: 'Received from partner (bill)' });
+  push(env, boss, op('partner_bill', { bill: BILL, items: [{ ts: T(1), cost: 650000 }] }));
+  const ts = newTs();
+  assert.strictEqual(push(env, boss, op('partner_settle', { bill: BILL, payment: 'Cash', rows: [{ object: '-Horse Riding', ts, net: 650000 }] })).results[0].status, 'applied');
+  assert.strictEqual(rowE(env, ts)[12], 'Paid to partner (bill)');
+  assert.strictEqual(rowM(env, ts)[12], 'Paid to partner (bill)');
+  assert.ok(env.book['New guest'].data.some(r => r[5] === 'Paid to partner (bill)'));
+  // An Income row written with the old words before the rename is still not a sale to bill.
+  env.book['Entries'].appendRow([day, 'Income', 'Tour', '-Horse Riding', '', '', '', 50000, 'boss@x', '', '', '', 'Payment From Partner', 'Cash', newTs(), '', 'B_02/10-10:00', '', 'Settled']);
+  env.book['Entries'].appendRow([day, 'Income', 'Tour', '-Horse Riding', '', '', '', 50000, 'boss@x', '', '', '', 'Received from partner (bill)', 'Cash', newTs(), '', 'B_02/10-10:00', '', '']);
+  const lines = env.call({ action: 'pull', token: boss }).partners.lines;
+  assert.ok(!lines.some(l => l.guest === 'Payment From Partner' || l.guest === 'Received from partner (bill)'), JSON.stringify(lines));
 });

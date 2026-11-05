@@ -25,7 +25,9 @@ const round = n => Math.round(n);
  * Replays operations on a list of lines. Safe to replay an operation the list
  * already contains (same result), because a pull and a push can overlap.
  */
-export function applyOps(lines, ops) {
+export function applyOps(lines, ops, partnerLabels) {
+  const payTo = (partnerLabels && partnerLabels.to) || 'Payment to Partner';
+  const payFrom = (partnerLabels && partnerLabels.from) || 'Payment From Partner';
   const byTs = new Map(lines.map(l => [l.ts, { ...l }]));
   for (const { op, pending } of ops) {
     const p = op.payload || {};
@@ -81,7 +83,7 @@ export function applyOps(lines, ops) {
         const toPartner = r.net > 0;
         byTs.set(r.ts, mark({ ts: r.ts, type: toPartner ? 'Expense' : 'Income', category: '', object: r.object, qty: null, unit: 0,
           total: toPartner ? 0 : -r.net, unitCost: 0, cost: toPartner ? r.net : 0, author: op.author || '',
-          guest: toPartner ? 'Payment to Partner' : 'Payment From Partner', payment: p.payment, comment: p.bill, bill: 'Settled', soldBy: '' }));
+          guest: toPartner ? payTo : payFrom, payment: p.payment, comment: p.bill, bill: 'Settled', soldBy: '' }));
       }
     } else if (op.type === 'refund') {
       const orig = byTs.get(p.origTs);
@@ -108,8 +110,8 @@ export async function newerOps() {
 
 /** Lines as the device should show them right now. */
 export async function ledgerView() {
-  const [lines, ops] = await Promise.all([db.get('lines'), newerOps()]);
-  return applyOps(lines || [], ops);
+  const [lines, ops, partnerLabels] = await Promise.all([db.get('lines'), newerOps(), db.get('partnerLabels')]);
+  return applyOps(lines || [], ops, partnerLabels);
 }
 
 /**

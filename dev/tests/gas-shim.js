@@ -56,6 +56,7 @@ class Sheet {
     for (let i = this.data.length - 1; i >= 0; i--) if ((this.data[i] || []).some(v => v !== '' && v !== undefined && v !== null)) return i + 1;
     return 0;
   }
+  getLastColumn() { return this.data.reduce((m, row) => { for (let j = (row || []).length - 1; j >= m; j--) if (row[j] !== '' && row[j] !== undefined && row[j] !== null) return j + 1; return m; }, 0); }
   getRange(a, b, c, d) {
     if (typeof a === 'string') {
       const m = a.match(/^([A-Z]+):([A-Z]+)$/);

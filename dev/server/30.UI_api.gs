@@ -312,6 +312,8 @@ var UIAPI = (function () {
       serverTime: new Date().toISOString(),
       catalog: readCatalog_(),
       payments: readPayments_(),
+      expenses: readExpenseItems_(),
+      partnerLabels: partnerLabelsOut_(),
       guests: readGuests_(),
       shift: shiftState_(),
       lines: readLines_(ent),
@@ -358,11 +360,40 @@ var UIAPI = (function () {
     });
     return out;
   }
+  // Data activities lists are read from row 2 to the sheet's last row, so rows added later count.
+  // The newer lists are found by their header in row 1 (columns may be moved), with a fallback column.
+  /** 1-based column of Data activities whose row-1 header is name, else fallback (0: none). */
+  function daCol_(s, name, fallback) {
+    var w = s.getLastColumn();
+    var head = w > 0 ? s.getRange(1, 1, 1, w).getValues()[0] : [];
+    for (var i = 0; i < head.length; i++) if (String(head[i]).trim().toLowerCase() === name.toLowerCase()) return i + 1;
+    return fallback || 0;
+  }
+  /** The non-empty values of one column, row 2 to the last row, trimmed, in order. */
+  function daList_(s, col) {
+    var n = s.getLastRow() - 1;
+    if (!col || n < 1) return [];
+    return s.getRange(2, col, n, 1).getValues().map(function (r) { return String(r[0]).trim(); }).filter(String);
+  }
+  /** Payment types (column "Payment type", Q): the Sell screen's payment picker. */
   function readPayments_() {
     var s = ss_().getSheetByName(SHEETS.catalog);
-    var list = s ? s.getRange('Q2:Q20').getValues().map(function (r) { return String(r[0]).trim(); }).filter(String) : [];
+    var list = s ? daList_(s, daCol_(s, 'Payment type', 17)) : [];
     if (list.indexOf('Unpaid') < 0) list.push('Unpaid');
     return list;
+  }
+  /**
+   * Buttons of the Expenses screen: column "Expense buttons" of Data activities, in order, each
+   * with its sub-category (only items listed under L..O can be written). Empty: the app keeps its own list.
+   */
+  function readExpenseItems_() {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    if (!s) return [];
+    var cats = expenseCategories_(s), seen = {};
+    return daList_(s, daCol_(s, 'Expense buttons', 0)).filter(function (o) {
+      if (!cats[o] || seen[o]) return false;
+      return (seen[o] = true);
+    }).map(function (o) { return { object: o, category: cats[o] }; });
   }
   function readGuests_() {
     var names = {};
@@ -467,14 +498,22 @@ var UIAPI = (function () {
     if (!isFinite(n) || n <= 0 || n > 1000) throw apiError_('bad_amount', 'Invalid quantity');
     return Math.round(n * 100) / 100;
   }
-  /** Sub-category of an expense item: header of the first column (L..O) listing it, scanning row by row like the old dialog. */
+  /** Item -> sub-category: header of the first column (L..O) listing it, scanning row by row like the old dialog, to the last row. */
+  function expenseCategories_(s) {
+    var out = {}, n = s.getLastRow() - 1;
+    if (n < 1) return out;
+    var head = s.getRange(1, 12, 1, 4).getValues()[0];
+    var rows = s.getRange(2, 12, n, 4).getValues();
+    for (var i = 0; i < rows.length; i++) for (var j = 0; j < 4; j++) {
+      var o = String(rows[i][j]).trim();
+      if (o && !(o in out)) out[o] = String(head[j]).trim();
+    }
+    return out;
+  }
   function expenseCategory_(obj) {
     var s = ss_().getSheetByName(SHEETS.catalog);
     if (!s || !obj) return '';
-    var head = s.getRange(1, 12, 1, 4).getValues()[0];
-    var rows = s.getRange(2, 12, 29, 4).getValues();
-    for (var i = 0; i < rows.length; i++) for (var j = 0; j < 4; j++) if (String(rows[i][j]).trim() === obj) return String(head[j]).trim();
-    return '';
+    return expenseCategories_(s)[obj] || '';
   }
   function payment_(v, allowUnpaid) {
     var p = String(v || '').trim();
@@ -640,11 +679,23 @@ var UIAPI = (function () {
   }
 
   // ---------- partners (old "12." dialogs) ----------
-  // A partner product is a name starting with "-" in Data activities (L1:L15, M2:M50, N2:N50).
+  // A partner product is a name starting with "-" in Data activities (L, M, N, to the last row).
   // Entries S holds the billing status of a partner sale: "" not billed, "B_dd/MM-HH:mm" on that
   // bill, "Paid" once the bill is settled; the payment row itself has S "Settled".
   var BILL_RE = /^B_\d\d\/\d\d-\d\d:\d\d$/;
-  var PAY_TO = 'Payment to Partner', PAY_FROM = 'Payment From Partner', PAID_TO_PARTNER = 'Paid to Partner';
+  // Entries M (Guest) of a settlement row. The words are read from the "Partner lines" column of
+  // Data activities (row 2: we pay the partner, row 3: the partner pays us); these are the fallback.
+  var PAY_TO_DEFAULT = 'Payment to Partner', PAY_FROM_DEFAULT = 'Payment From Partner', PAID_TO_PARTNER = 'Paid to Partner';
+  function partnerLabels_() {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    var col = s ? daCol_(s, 'Partner lines', 0) : 0;
+    var v = col && s.getLastRow() >= 2 ? s.getRange(2, col, 2, 1).getValues() : [[''], ['']];
+    var to = String(v[0][0]).trim() || PAY_TO_DEFAULT, from = String(v[1][0]).trim() || PAY_FROM_DEFAULT;
+    // Rows written with the default words before a rename are still payment rows.
+    var all = [to, from, PAY_TO_DEFAULT, PAY_FROM_DEFAULT].filter(function (x, i, a) { return a.indexOf(x) === i; });
+    return { to: to, from: from, all: all };
+  }
+  function partnerLabelsOut_() { var l = partnerLabels_(); return { to: l.to, from: l.from }; }
   var MAIL = { bills: 'therabbittreegilimeno@gmail.com', alerts: 'rabbittree.system.alerts.com@gmail.com' };
   function partnerItems_() {
     var s = ss_().getSheetByName(SHEETS.catalog);
@@ -654,16 +705,18 @@ var UIAPI = (function () {
       name = String(name).trim();
       if (name.charAt(0) === '-' && !seen[name]) { seen[name] = true; out.push({ object: name, group: group }); }
     };
+    var last = s.getLastRow();
+    if (last < 1) return out;
     var head = s.getRange(1, 12, 1, 3).getValues()[0];
-    s.getRange(1, 12, 15, 1).getValues().forEach(function (r) { add(r[0], String(head[0]).trim()); });
-    s.getRange(2, 13, 49, 2).getValues().forEach(function (r) { add(r[0], String(head[1]).trim()); add(r[1], String(head[2]).trim()); });
+    s.getRange(1, 12, last, 1).getValues().forEach(function (r) { add(r[0], String(head[0]).trim()); });
+    if (last >= 2) s.getRange(2, 13, last - 1, 2).getValues().forEach(function (r) { add(r[0], String(head[1]).trim()); add(r[1], String(head[2]).trim()); });
     return out;
   }
-  /** Header of the Data activities column (K..O, rows 2..40) listing the object: the sub-category of a payment row. */
+  /** Header of the Data activities column (K..O, row 2 to the last row) listing the object: the sub-category of a payment row. */
   function partnerCategory_(obj) {
     var s = ss_().getSheetByName(SHEETS.catalog);
-    if (!s) return '';
-    var head = s.getRange(1, 11, 1, 5).getValues()[0], rows = s.getRange(2, 11, 39, 5).getValues();
+    if (!s || s.getLastRow() < 2) return '';
+    var head = s.getRange(1, 11, 1, 5).getValues()[0], rows = s.getRange(2, 11, s.getLastRow() - 1, 5).getValues();
     for (var i = 0; i < rows.length; i++) for (var j = 0; j < 5; j++) if (String(rows[i][j]).trim() === obj) return String(head[j]).trim();
     return '';
   }
@@ -671,17 +724,18 @@ var UIAPI = (function () {
   var costOf_ = function (r) { return num_(r[E.realCost] !== '' ? r[E.realCost] : r[E.cost]); };
   /** A sale that can go on a partner bill: Income of a partner product, not a payment row nor a refund line. */
   var REFUND_ANY = ['Refunded', 'Refunding', 'Refund-ed', 'Refund-ing']; // the old dialog wrote the dashed forms
-  function isPartnerSale_(r, set) {
-    return String(r[E.type]) === 'Income' && set[String(r[E.obj]).trim()] && [PAY_TO, PAY_FROM].indexOf(String(r[E.guest])) < 0 &&
+  /** set: partner objects; payLabels: partnerLabels_().all (read once by the caller). */
+  function isPartnerSale_(r, set, payLabels) {
+    return String(r[E.type]) === 'Income' && set[String(r[E.obj]).trim()] && payLabels.indexOf(String(r[E.guest])) < 0 &&
       REFUND_ANY.indexOf(String(r[E.comment]).trim()) < 0 && isTs_(String(r[E.ts]));
   }
   /** The sales of a bill that count, once per line id (a line copied twice by the old sync counts once). */
   function billLines_(ent, bill) {
-    var set = {}, seen = {};
+    var set = {}, seen = {}, pl = partnerLabels_().all;
     partnerItems_().forEach(function (it) { set[it.object] = true; });
     return ent.rows.filter(function (r) {
       var t = String(r[E.ts]);
-      if (String(r[E.status] || '').trim() !== bill || !isPartnerSale_(r, set) || seen[t]) return false;
+      if (String(r[E.status] || '').trim() !== bill || !isPartnerSale_(r, set, pl) || seen[t]) return false;
       return (seen[t] = true);
     });
   }
@@ -692,10 +746,10 @@ var UIAPI = (function () {
     var items = partnerItems_();
     var set = {};
     items.forEach(function (it) { set[it.object] = true; });
-    var lines = [], seen = {};
+    var lines = [], seen = {}, pl = partnerLabels_().all;
     if (ent) ent.rows.forEach(function (r) {
       var st = String(r[E.status] || '').trim();
-      if (!isPartnerSale_(r, set) || !(st === '' || BILL_RE.test(st)) || seen[String(r[E.ts])]) return;
+      if (!isPartnerSale_(r, set, pl) || !(st === '' || BILL_RE.test(st)) || seen[String(r[E.ts])]) return;
       seen[String(r[E.ts])] = true;
       lines.push({ ts: String(r[E.ts]), date: iso_(r[E.date]), object: String(r[E.obj]).trim(), qty: r[E.qty] === '' ? null : num_(r[E.qty]),
         price: priceOf_(r), cost: costOf_(r), guest: String(r[E.guest]), payment: String(r[E.pay]), comment: String(r[E.comment]), bill: st });
@@ -1583,7 +1637,7 @@ var UIAPI = (function () {
       if (!items.length || items.length > 300) throw apiError_('bad_payload', 'A bill needs 1 to 300 lines');
       var set = {};
       partnerItems_().forEach(function (it) { set[it.object] = true; });
-      var ent = entries_(), man = manual_();
+      var ent = entries_(), man = manual_(), pl = partnerLabels_().all;
       var mine = {}, changes = [], rows = [];
       items.forEach(function (it) {
         var ts = String(it.ts);
@@ -1591,7 +1645,7 @@ var UIAPI = (function () {
         mine[ts] = true;
         var r = ent.row(ts);
         if (!r) throw apiError_('line_not_found', 'A line of this bill is no longer in the sheet');
-        if (!isPartnerSale_(r, set)) throw apiError_('bad_payload', String(r[E.obj]) + ' is not a partner sale');
+        if (!isPartnerSale_(r, set, pl)) throw apiError_('bad_payload', String(r[E.obj]) + ' is not a partner sale');
         var st = String(r[E.status] || '').trim();
         if (st !== '' && st !== bill) throw apiError_('already_billed', String(r[E.obj]) + ' for ' + r[E.guest] + ' is already on ' + st);
         var cost = amount_(it.cost, 'cost');
@@ -1681,7 +1735,8 @@ var UIAPI = (function () {
       if (!resumed && (objs.length !== Object.keys(want).length || objs.some(function (o) { return !want[o] || want[o].net !== Math.round(net[o]); }))) {
         throw apiError_('bill_changed', 'The bill changed since it was shown (amounts: ' + objs.map(function (o) { return o + ' ' + Math.round(net[o]); }).join(', ') + '). Open it again.');
       }
-      var author = me.author || me.username, day = dateOnly_(at), out = [];
+      var author = me.author || me.username, day = dateOnly_(at), out = [], lab = partnerLabels_();
+      var PAY_TO = lab.to, PAY_FROM = lab.from;
       objs.forEach(function (o) {
         var n = resumed ? want[o].net : Math.round(net[o]), ts = want[o].ts;
         if (n === 0) return;

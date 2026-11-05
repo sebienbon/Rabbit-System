@@ -27,15 +27,24 @@ export const EXPENSE_ITEMS = [
   { label: 'Laundry', object: 'Laundry', tone: 'serv' },
   { label: 'Others', object: 'other', tone: 'other' },
 ];
-const expenseLabel = obj => (EXPENSE_ITEMS.find(x => x.object === obj) || {}).label || obj;
+// The buttons come from the sheet (Data activities "Expense buttons", sent by pull) when it lists
+// any: a known item keeps its label and colour above, a new one shows its name in the "other" colour.
+let expenseItems = EXPENSE_ITEMS;
+export function expenseButtons(fromSheet) {
+  const list = (fromSheet || []).map(x => String((x && x.object) || '').trim()).filter(Boolean);
+  if (!list.length) return EXPENSE_ITEMS;
+  return list.map(o => EXPENSE_ITEMS.find(x => x.object === o) || { label: o, object: o, tone: 'other' });
+}
+const expenseLabel = obj => (expenseItems.find(x => x.object === obj) || EXPENSE_ITEMS.find(x => x.object === obj) || {}).label || obj;
 
 export function newCart() { return { guests: [], items: [], payment: null, comment: '' }; }
 export const cartBusy = ui => !!(ui.cart && (ui.cart.items.length || ui.cart.guests.length));
 
 /** Shared data for one render. */
 async function load(ctx) {
-  const [lines, catalog, payments, guestList, gear] = await Promise.all([
-    ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests'), gearView()]);
+  const [lines, catalog, payments, guestList, gear, expenses] = await Promise.all([
+    ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests'), gearView(), db.get('expenses')]);
+  expenseItems = expenseButtons(expenses);
   const names = new Map();
   for (const g of guestList || []) names.set(norm(g), g);
   for (const l of lines) if (l.guest && l.type === 'Income' && l.object !== 'Cash Supply' && !names.has(norm(l.guest))) names.set(norm(l.guest), l.guest);
@@ -625,7 +634,7 @@ function renderExpenses(root, d) {
       ${allowed ? '' : '<p class="muted">Only the person on shift or a manager can record an expense.</p>'}
       <form id="expForm" novalidate${allowed ? '' : ' hidden'}>
         <fieldset class="field"><legend>What for</legend>
-          <div class="eitems">${EXPENSE_ITEMS.map(it => `<button type="button" class="eitem ${it.tone}${ex.item === it.object ? ' on' : ''}" data-item="${esc(it.object)}" aria-pressed="${ex.item === it.object}">${esc(it.label)}</button>`).join('')}</div>
+          <div class="eitems">${expenseItems.map(it => `<button type="button" class="eitem ${it.tone}${ex.item === it.object ? ' on' : ''}" data-item="${esc(it.object)}" aria-pressed="${ex.item === it.object}">${esc(it.label)}</button>`).join('')}</div>
         </fieldset>
         <label class="field money"><span>Amount</span>
           <span class="moneybox"><span class="cur">Rp</span><input id="expAmount" inputmode="numeric" autocomplete="off" value="${ex.amount ? money(ex.amount) : ''}"></span></label>

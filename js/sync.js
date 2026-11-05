@@ -146,6 +146,8 @@ async function doPull(opts = {}) {
     const writes = [
       ['kv', 'put', r.catalog, 'catalog'],
       ['kv', 'put', r.payments, 'payments'],
+      ['kv', 'put', r.expenses || [], 'expenses'],
+      ['kv', 'put', r.partnerLabels || null, 'partnerLabels'],
       ['kv', 'put', r.guests, 'guests'],
       ['kv', 'put', r.lines || [], 'lines'],
       ['kv', 'put', r.cashbox || [], 'cashbox'],

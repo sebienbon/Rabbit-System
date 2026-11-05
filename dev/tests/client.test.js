@@ -236,3 +236,18 @@ test('second review: product names compare without case or spaces, like the shee
   assert.doesNotMatch(work, /=== d\.gear\.product\.(mask|bike)|\[d\.gear\.product\.mask, d\.gear\.product\.bike\]\.includes/);
   assert.match(work, /sameName\(name, d\.gear\.product\.mask\)/);
 });
+
+test('expense buttons: the sheet list when sent (known items keep label and colour), else the built-in list', async () => {
+  const { expenseButtons, EXPENSE_ITEMS } = await js('work.js');
+  assert.strictEqual(expenseButtons([]), EXPENSE_ITEMS);
+  assert.strictEqual(expenseButtons(undefined), EXPENSE_ITEMS);
+  assert.deepStrictEqual(expenseButtons([{ object: "Guest's services", category: 'Other' }, { object: 'Pajak', category: 'Other' }]),
+    [{ label: "Guest's Amenities", object: "Guest's services", tone: 'house' }, { label: 'Pajak', object: 'Pajak', tone: 'other' }]);
+});
+
+test('partner settle shown before the next pull uses the partner words from the sheet', async () => {
+  const { applyOps } = await js('ledger.js');
+  const o = op('partner_settle', { bill: 'B_01/11-10:00', payment: 'Cash', rows: [{ object: '-Horse Riding', ts: 'P1', net: 100 }, { object: '-Snorkeling Trip', ts: 'P2', net: -50 }] }, '2026-11-04T10:00:00');
+  assert.deepStrictEqual(applyOps([], [o]).map(l => l.guest).sort(), ['Payment From Partner', 'Payment to Partner']);
+  assert.deepStrictEqual(applyOps([], [o], { to: 'X to', from: 'X from' }).map(l => l.guest).sort(), ['X from', 'X to']);
+});
