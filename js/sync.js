@@ -155,6 +155,10 @@ async function doPull(opts = {}) {
       ['kv', 'put', r.settlement || null, 'settlement'],
       ['kv', 'put', r.bar || [], 'bar'], // TEMPORARY (bar cash-out)
       ['kv', 'put', r.gear || null, 'gear'],
+      // Newer servers only: the app shows Commissions and the activities editor when listed here.
+      ['kv', 'put', Array.isArray(r.features) ? r.features : [], 'features'],
+      ['kv', 'put', r.commissions || null, 'commissions'],
+      ['kv', 'put', r.activities || [], 'activities'],
       ['kv', 'put', v, 'linesV'],
       // Already in this copy, or older than two days (safety net if the version ever jumps).
       ...applied.filter(a => a.v <= v || Date.now() - new Date(a.op.at).getTime() > 2 * 86400000).map(a => ['applied', 'delete', a.id]),

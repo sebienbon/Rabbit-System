@@ -33,6 +33,8 @@ class Range {
   getValue() { return this.getValues()[0][0]; }
   setNumberFormat(f) { this.sheet.formats.push([this.r, this.c, f]); return this; }
   setFontWeight() { return this; }
+  /** Only formats are copied in the server (PASTE_FORMAT): recorded, values untouched. */
+  copyTo(dst, type) { (this.sheet.copies = this.sheet.copies || []).push({ from: [this.r, this.c, this.nr, this.nc], to: [dst.r, dst.c, dst.nr, dst.nc], type }); return this; }
 }
 
 class Sheet {
@@ -96,7 +98,7 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
   }
   const ctx = {
     console, Date, JSON, Math, Object, Array, String, Number, isNaN, isFinite, Error,
-    SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush() {} },
+    SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush() {}, CopyPasteType: { PASTE_FORMAT: 'PASTE_FORMAT' } },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       computeDigest: (alg, s) => Array.from(crypto.createHash(alg).update(s, 'utf8').digest()).map(b => (b > 127 ? b - 256 : b)),

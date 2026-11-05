@@ -630,3 +630,43 @@ h3.sub .help-pop { left: -4px; }
 @media (max-width: 560px) { .who .refresh span { display: none; } }
 .helprow .grow { flex: 1; }
 .newguestform { margin: 4px 0 14px; }
+
+/* Sell: discreet links to Commissions and the tours editor (shown only with a server that supports them) */
+.labelrow { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.selltools { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.selltools .tool { background: none; border: 1px solid transparent; border-radius: 99px; padding: 3px 10px; font: 700 .82rem var(--sans); color: var(--ink-soft); cursor: pointer; }
+.selltools .tool:hover { color: var(--accent); background: var(--accent-bg); border-color: var(--line); }
+.extra .extrahead { display: flex; align-items: center; gap: 8px; font-size: .85rem; color: var(--ink-soft); margin-bottom: 4px; }
+.extra .extrahead .grow { flex: 1; }
+.extra .extrahead .link { margin: 0; }
+.extra .extrahead .help-pop { right: -4px; }
+.extra h2 { margin-bottom: 2px; }
+.extra > p.muted { margin: 0 0 16px; }
+.commwho .pay::before { display: none; }
+.commwho .pay { flex: 0 1 auto; gap: 10px; }
+.commwho .pay b { font-size: .85rem; opacity: .8; }
+.commtotal { margin: 4px 0 8px; }
+.clines, .alist { list-style: none; padding: 0; margin: 0 0 8px; }
+.clines > li { display: grid; grid-template-columns: 56px minmax(0, 1fr) 110px 104px; gap: 4px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.clines .when { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.clines .who, .alist .who { display: block; color: var(--ink-soft); font-size: .9rem; }
+.clines .amt { text-align: right; color: var(--accent-deep); }
+.clines .act, .alist .act { text-align: right; }
+.clines > li.waiting { opacity: .7; }
+.clines .inline, .alist .inline { grid-column: 1 / -1; margin-top: 4px; }
+.alist > li { display: grid; grid-template-columns: minmax(0, 1fr) 110px 110px 100px 76px; gap: 4px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.alist > li .num { text-align: right; }
+.alist > li .soft { color: var(--ink-soft); font-weight: 700; }
+.alist > li.ahead { border-top: 0; padding: 0 0 4px; font-size: .8rem; font-weight: 800; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .03em; }
+.alist > li.ahead span:not(:first-child) { text-align: right; }
+.alist > li.open { background: linear-gradient(var(--accent-bg), transparent 70%); border-radius: var(--radius-sm); padding-left: 8px; padding-right: 8px; }
+.actform .moneyin input { width: 120px; }
+.actform .inline.warn { flex-basis: 100%; margin-top: 0; }
+.danger-link { color: var(--bad); margin: 0; padding: 6px 4px; }
+.addact { margin-top: 4px; }
+@media (max-width: 600px) {
+  .clines > li { grid-template-columns: 46px minmax(0, 1fr) 90px; }
+  .clines .act { grid-column: 2 / -1; text-align: left; }
+  .alist > li { grid-template-columns: minmax(0, 1fr) 90px 64px; }
+  .alist > li > :nth-child(3), .alist > li > :nth-child(4) { display: none; }
+}

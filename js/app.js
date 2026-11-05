@@ -303,7 +303,7 @@ async function renderShift() {
 
 function bindTabs() {
   main().querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
-    ui.tab = b.dataset.tab; ui.closing = null; ui.editing = ui.deleting = ui.refunding = ui.solving = null; ui.supplyConfirm = false; ui.billPay = ui.billDel = ui.billPayType = null;
+    ui.tab = b.dataset.tab; ui.closing = null; ui.editing = ui.deleting = ui.refunding = ui.solving = null; ui.supplyConfirm = false; ui.sellView = ui.commMove = ui.actEdit = null; ui.billPay = ui.billDel = ui.billPayType = null;
     if (!expenseBusy(ui)) ui.expense = null;
     render();
   });
@@ -415,7 +415,7 @@ async function renderNow() {
       ui.notice = `${n} operation${n === 1 ? '' : 's'} still waiting to be sent — connect to the internet first, then log out.`;
       $('#logout').disabled = false; render(); return;
     }
-    await logout(ui.user); ui.user = null; ui.closing = null; ui.cart = null; ui.expense = ui.phantom = ui.supply = ui.solving = ui.partner = ui.billOpen = ui.billPay = ui.billDel = ui.card = ui.bar = null; ui.supplyConfirm = false; ui.tab = 'sell'; ui.billGuest = null; noticeShown = null; render(); };
+    await logout(ui.user); ui.user = null; ui.closing = null; ui.cart = null; ui.expense = ui.phantom = ui.supply = ui.solving = ui.partner = ui.billOpen = ui.billPay = ui.billDel = ui.card = ui.bar = ui.sellView = ui.commMove = ui.actEdit = ui.commWho = null; ui.supplyConfirm = false; ui.tab = 'sell'; ui.billGuest = null; noticeShown = null; render(); };
   const shiftOpen = !!(await currentShift());
   main().classList.toggle('wide', shiftOpen);
   await renderShift();

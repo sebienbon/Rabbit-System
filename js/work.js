@@ -5,6 +5,7 @@ import { money, parseMoney } from './shift.js';
 import { renderBar } from './bar.js'; // TEMPORARY (bar cash-out)
 import { gearView, backBefore, fmtWhen, sameName } from './gearcore.js';
 import { renderGear } from './gear.js';
+import { renderCommissions, renderActivities, catalogWithPending, hasFeature } from './sellextra.js';
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
 // Everything is written locally first (instant, works offline), then sent.
@@ -42,8 +43,9 @@ export const cartBusy = ui => !!(ui.cart && (ui.cart.items.length || ui.cart.gue
 
 /** Shared data for one render. */
 async function load(ctx) {
-  const [lines, catalog, payments, guestList, gear, expenses] = await Promise.all([
-    ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests'), gearView(), db.get('expenses')]);
+  const [lines, rawCatalog, payments, guestList, gear, expenses, features] = await Promise.all([
+    ledgerView(), db.get('catalog'), db.get('payments'), db.get('guests'), gearView(), db.get('expenses'), db.get('features')]);
+  const catalog = await catalogWithPending(rawCatalog); // tours edited here show at once
   expenseItems = expenseButtons(expenses);
   const names = new Map();
   for (const g of guestList || []) names.set(norm(g), g);
@@ -54,7 +56,7 @@ async function load(ctx) {
     u.total += l.total || 0; u.count++; if (l.ts < u.oldest) u.oldest = l.ts;
     unpaid.set(l.guest, u);
   }
-  return { lines, catalog: catalog || [], payments: payments || ['Cash', 'Unpaid'], guests: [...names.values()], unpaid, gear, ...ctx };
+  return { lines, catalog: catalog || [], payments: payments || ['Cash', 'Unpaid'], guests: [...names.values()], unpaid, gear, features: features || [], ...ctx };
 }
 
 // ---------------------------------------------------------------- tabs
@@ -72,7 +74,13 @@ export async function workTabs(ctx) {
 export async function renderWork(root, ctx) {
   const d = await load(ctx);
   const tab = ctx.ui.tab || 'sell';
-  if (tab === 'sell') renderSell(root, d);
+  if (tab === 'sell') {
+    // Commissions and the activities editor: only with a server that supports them.
+    const view = ctx.ui.sellView;
+    if (view === 'comm' && hasFeature(d.features, 'commissions')) await renderCommissions(root, d, helpTip);
+    else if (view === 'acts' && hasFeature(d.features, 'catalog_edit')) await renderActivities(root, d, helpTip);
+    else { ctx.ui.sellView = null; renderSell(root, d); }
+  }
   else if (tab === 'bills') renderBills(root, d);
   else if (tab === 'shift') renderShiftLines(root, d);
   else if (tab === 'expenses') renderExpenses(root, d);
@@ -84,6 +92,13 @@ export async function renderWork(root, ctx) {
 }
 
 // ---------------------------------------------------------------- sell
+/** Two discreet links next to "Products" (rarely used), when the server supports them. */
+function sellTools(d) {
+  const t = [];
+  if (hasFeature(d.features, 'commissions')) t.push('<button type="button" class="tool" data-sellview="comm">Commissions</button>');
+  if (hasFeature(d.features, 'catalog_edit')) t.push('<button type="button" class="tool" data-sellview="acts">Edit tours &amp; transport</button>');
+  return t.length ? `<span class="selltools">${t.join('')}</span>` : '';
+}
 function renderSell(root, d) {
   const { ui } = d;
   ui.cart = ui.cart || newCart();
@@ -101,7 +116,7 @@ function renderSell(root, d) {
         <ul class="suggest" id="guestSug" role="listbox" hidden></ul>
       </div>
       <div class="field">
-        <label for="prodIn">Products</label>
+        <div class="labelrow"><label for="prodIn">Products</label>${sellTools(d)}</div>
         <input id="prodIn" type="search" placeholder="Search products" autocomplete="off" value="${esc(ui.prodQuery || '')}">
       </div>
       <div id="prods"></div>
@@ -212,6 +227,7 @@ function renderSell(root, d) {
   root.addEventListener('click', async e => {
     const b = e.target.closest('button');
     if (!b || !root.contains(b)) return;
+    if (b.dataset.sellview) { ui.sellView = b.dataset.sellview; ui.commMove = ui.actEdit = null; d.render(); return; }
     if (b.dataset.sug !== undefined) return addGuest(b.dataset.sug);
     if (b.dataset.grm !== undefined) { cart.guests.splice(+b.dataset.grm, 1); renderGuests(); renderCart(); return; }
     if (b.dataset.add !== undefined) {

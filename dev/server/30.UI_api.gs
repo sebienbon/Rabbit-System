@@ -322,6 +322,9 @@ var UIAPI = (function () {
       settlement: lastSettlement_(),
       gear: ss_().getSheetByName(SHEETS.sg) ? gearForReception_(gearState_(), ent) : null,
       bar: readBarCashouts_(), // TEMPORARY (bar cash-out): remove with the BAR CASH-OUT block below
+      commissions: readCommissions_(ent, me),
+      activities: readActivities_(),
+      features: FEATURES,
       beds24: beds24
     };
     if (sess.reg) {
@@ -382,6 +385,142 @@ var UIAPI = (function () {
     if (list.indexOf('Unpaid') < 0) list.push('Unpaid');
     return list;
   }
+  // ---------- commissions (tab "Commis." / old "Assign sellers" dialog) ----------
+  // Commis. pays 20% of the margin (H or G, minus L or K) of each Entries line whose T (Seller)
+  // is the staff email, P (month correction) not "Past", object not in Data activities
+  // "Commission exceptions", guest not a partner payment row (words of "Partner lines").
+  // The old dialog let the desk move a partner sale ("-" product, not refunded, not a settled
+  // payment row, not Past, not the Sunset Boat / Bike Suma) to another seller (T in Entries,
+  // R in Entries Manual) and emailed the change to the Protect "Auth Base" addresses.
+  var COMMISSION_RATE = 0.2;
+  var SELLER_SKIP = ['-sunset boat', '-bike suma']; // never reassigned by the old dialog
+  var FEATURES = ['commissions', 'catalog_edit'];    // what this server supports (the app hides the rest)
+  var lc_ = function (v) { return String(v === null || v === undefined ? '' : v).trim().toLowerCase(); };
+  /** Active reception people with an author email (UI_Users D): who can be a seller. */
+  function sellers_() {
+    return readUsers_().filter(function (u) { return u.active && u.role !== 'gear' && /@/.test(u.author); })
+      .map(function (u) { return { email: u.author, name: u.name, username: u.username }; });
+  }
+  /** Data activities "Commission exceptions" (V), the whole column, found by its header; created if missing. */
+  function commissionExceptions_() {
+    var s = ss_().getSheetByName(SHEETS.catalog), set = {};
+    if (!s) return set;
+    daList_(s, daCol_(s, 'Commission exceptions', 0)).forEach(function (o) { set[lc_(o)] = true; });
+    return set;
+  }
+  function ensureExceptionsCol_() {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    if (!s || daCol_(s, 'Commission exceptions', 0)) return;
+    writes_++;
+    s.getRange(1, s.getLastColumn() + 1).setValue('Commission exceptions');
+  }
+  var isPast_ = function (r) { return /past/i.test(String(r[E.past])); }; // SEARCH("Past", P) in Commis.
+  /** The line counts in Commis. (current period: not Past) for its Seller. */
+  function isCommission_(r, exc, payLabels) {
+    return /@/.test(String(r[E.seller] || '')) && !isPast_(r) && !exc[lc_(r[E.obj])] &&
+      payLabels.indexOf(String(r[E.guest]).trim()) < 0 && isTs_(String(r[E.ts]));
+  }
+  /** The old dialog's rule for moving a line to another seller (plus: it must count in Commis.). */
+  function canMoveSeller_(r, exc, payLabels) {
+    var obj = String(r[E.obj]).trim();
+    return isCommission_(r, exc, payLabels) && obj.charAt(0) === '-' && SELLER_SKIP.indexOf(obj.toLowerCase()) < 0 &&
+      REFUND_ANY.indexOf(String(r[E.comment]).trim()) < 0 && String(r[E.status] || '').trim() !== 'Settled';
+  }
+  /** The commission lines of the current period: my own, or everybody's for a manager. */
+  function readCommissions_(ent, me) {
+    if (!ent) return null;
+    var exc = commissionExceptions_(), pl = partnerLabels_().all, mine = lc_(me.author), all = me.role !== 'staff';
+    var seen = {}, lines = [];
+    ent.rows.forEach(function (r) {
+      var t = String(r[E.ts]);
+      if (seen[t] || !isCommission_(r, exc, pl)) return;
+      var seller = String(r[E.seller]).trim();
+      if (!all && lc_(seller) !== mine) return;
+      seen[t] = true; // a line copied twice by the old sync counts once here
+      var margin = priceOf_(r) - costOf_(r);
+      lines.push({ ts: t, date: iso_(r[E.date]), object: String(r[E.obj]), guest: String(r[E.guest]), price: priceOf_(r), cost: costOf_(r),
+        amount: Math.round(margin * COMMISSION_RATE), seller: seller, canMove: canMoveSeller_(r, exc, pl) });
+    });
+    return { rate: COMMISSION_RATE, all: all, staff: sellers_().map(function (u) { return { email: u.email, name: u.name }; }), lines: lines };
+  }
+
+  // ---------- activities editor (Data activities: Tour and Transport) ----------
+  // Every activity is in column A ("Activity", price in B "Selling Price", cost in C "Purchase
+  // prices") AND in the list of its sub-category (header "Tour" or "Transport", N / M today):
+  // the old dialogs read the list, then look the price up by name in A.
+  var ACT_CATS = ['Tour', 'Transport'];
+  function actLayout_(s) {
+    var L = { a: daCol_(s, 'Activity', 1), b: daCol_(s, 'Selling Price', 2), c: daCol_(s, 'Purchase prices', 3), lists: {} };
+    ACT_CATS.forEach(function (c) { L.lists[c] = daCol_(s, c, c === 'Tour' ? 14 : 13); });
+    ['Service', 'Transport', 'Tour', 'Other'].forEach(function (c, i) { L.lists[c] = L.lists[c] || daCol_(s, c, 12 + i); });
+    if (L.b !== L.a + 1 || L.c !== L.a + 2) throw apiError_('bad_sheet', 'Data activities: Selling Price and Purchase prices must follow Activity');
+    return L;
+  }
+  var priceCell_ = function (v) { return v === '' || v === null || v === undefined || isNaN(num_(v)) || !/\d/.test(String(v)) ? null : num_(v); };
+  /** Tour and Transport lists with price and cost from A..C; inA false when the name is missing from A. */
+  function readActivities_() {
+    var s = ss_().getSheetByName(SHEETS.catalog);
+    if (!s || s.getLastRow() < 2) return [];
+    var L = actLayout_(s), n = s.getLastRow() - 1;
+    var a = s.getRange(2, L.a, n, 3).getValues(), byName = {};
+    a.forEach(function (r) { var k = String(r[0]).trim(); if (k && !(k in byName)) byName[k] = r; });
+    var out = [];
+    ACT_CATS.forEach(function (cat) {
+      var seen = {};
+      daList_(s, L.lists[cat]).forEach(function (name) {
+        if (seen[name]) return;
+        seen[name] = true;
+        var r = byName[name];
+        out.push({ category: cat, name: name, inA: !!r, price: r ? priceCell_(r[1]) : null, cost: r ? priceCell_(r[2]) : null,
+          costText: r && priceCell_(r[2]) === null ? String(r[2]).trim() : '' });
+      });
+    });
+    return out;
+  }
+  /** Row numbers (1-based) in column col, rows 2..last, whose trimmed value is name. */
+  function rowsWith_(s, col, name) {
+    var n = s.getLastRow() - 1, out = [];
+    if (n < 1) return out;
+    s.getRange(2, col, n, 1).getValues().forEach(function (r, i) { if (String(r[0]).trim() === name) out.push(i + 2); });
+    return out;
+  }
+  /** First empty row below the last value of columns col..col+w-1; its format copied from the row above. */
+  function appendInCols_(s, col, w, values) {
+    writes_++;
+    var r = Math.max(lastRowIn_(s, col, w), 1) + 1;
+    if (s.getMaxRows && r > s.getMaxRows()) s.insertRowsAfter(s.getMaxRows(), 1);
+    if (r > 2) s.getRange(r - 1, col, 1, w).copyTo(s.getRange(r, col, 1, w), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    s.getRange(r, col, 1, w).setValues([values]);
+    return r;
+  }
+  /**
+   * Removes the cells of rows `rows` from columns col..col+w-1 only: what is below moves up one
+   * row inside those columns, the other columns and every cell format stay where they are
+   * (values rewritten in place, never a row or a cell range deleted). Refused if a formula is there.
+   */
+  function compactOut_(s, col, w, rows) {
+    if (!rows.length) return;
+    var last = lastRowIn_(s, col, w);
+    var rng = s.getRange(2, col, last - 1, w);
+    if (rng.getFormulas().some(function (r) { return r.some(String); })) throw apiError_('bad_sheet', 'Data activities has a formula in that list: change it in the sheet');
+    var drop = {}; rows.forEach(function (r) { drop[r] = true; });
+    var vals = rng.getValues().filter(function (r, i) { return !drop[i + 2]; }).map(function (r) { return r.map(safe_); });
+    while (vals.length < last - 1) vals.push(new Array(w).fill(''));
+    writes_++;
+    rng.setValues(vals);
+  }
+  function actName_(v, keepPlain) {
+    var t = text_(v, 100, 'Name');
+    if (!t || t === "'") throw apiError_('bad_payload', 'Type the activity name');
+    if (/^'/.test(t)) throw apiError_('bad_payload', 'A name cannot start with = + or @');
+    // Partner products start with "-" (partner bills and the old seller dialog look for it).
+    return keepPlain || t.charAt(0) === '-' ? t : '-' + t;
+  }
+  function actMoney_(v, field, optional) {
+    if (optional && (v === '' || v === null || v === undefined)) return '';
+    return amount_(v, field);
+  }
+
   /**
    * Buttons of the Expenses screen: column "Expense buttons" of Data activities, in order, each
    * with its sub-category (only items listed under L..O can be written). Empty: the app keeps its own list.
@@ -524,7 +663,7 @@ var UIAPI = (function () {
   function entries_() {
     var s = sheet_(SHEETS.entries);
     var last = lastRowIn_(s, 1, 15);
-    var rows = last >= 2 ? s.getRange(2, 1, last - 1, 19).getValues() : [];
+    var rows = last >= 2 ? s.getRange(2, 1, last - 1, 20).getValues() : []; // A..T (T Seller)
     var byTs = {}, all = {};
     rows.forEach(function (r, i) { var t = String(r[E.ts]); if (isTs_(t)) { byTs[t] = i + 2; (all[t] = all[t] || []).push(i + 2); } });
     return { sheet: s, rows: rows, last: last, byTs: byTs, all: all, row: function (ts) { var n = byTs[ts]; return n ? rows[n - 2] : null; } };
@@ -794,7 +933,7 @@ var UIAPI = (function () {
    * Sends one email once per operation (a retry after a later failure does not send it again).
    * A mail failure (quota, bad address) never blocks the operation: it comes back as a warning.
    */
-  var MAIL_KINDS = ['cost', 'bill', 'settle', 'close'];
+  var MAIL_KINDS = ['cost', 'bill', 'settle', 'close', 'seller'];
   var ALERT_TO = ['therabbittreemanager@gmail.com', 'sebien.legoff@gmail.com']; // manager, owner
   function mailOnce_(op, kind, msg) {
     var props = PropertiesService.getScriptProperties(), key = 'UI_MAIL_' + op.id + '_' + kind;
@@ -1405,6 +1544,112 @@ var UIAPI = (function () {
      * A guest pays lines left Unpaid: payment type, author and timestamp change, as in the
      * old billing dialog. Each item can be resumed if an earlier attempt stopped half-way.
      */
+    /**
+     * Commissions: give a line to another seller (old "Assign sellers" dialog): Entries T and
+     * Entries Manual R of every copy of the line. Staff move their own lines; managers any line.
+     * payload: { ts, from (the seller the device saw), to (email of an active reception user) }.
+     */
+    seller_change: function (op, me) {
+      var p = op.payload || {};
+      parseAt_(op.at);
+      var ts = String(p.ts || '');
+      if (!isTs_(ts)) throw apiError_('bad_payload', 'Invalid line id');
+      var to = sellers_().filter(function (u) { return lc_(u.email) === lc_(p.to); })[0];
+      if (!to) throw apiError_('bad_payload', 'Choose an active reception staff member');
+      var ent = entries_();
+      var rows = ent.all[ts] || [];
+      if (!rows.length) throw apiError_('line_not_found', 'This line is no longer in the sheet');
+      var r = ent.rows[rows[0] - 2];
+      var cur = String(r[E.seller] || '').trim();
+      if (lc_(cur) === lc_(to.email)) return { already: true }; // a retry, or already done in the sheet
+      if (lc_(cur) !== lc_(p.from)) throw apiError_('changed', 'The seller of this line changed meanwhile (now ' + (cur || 'nobody') + '). Look again.');
+      if (me.role === 'staff' && lc_(cur) !== lc_(me.author)) throw apiError_('forbidden', 'You can only give away your own lines. Ask a manager.');
+      ensureExceptionsCol_();
+      if (!canMoveSeller_(r, commissionExceptions_(), partnerLabels_().all)) {
+        throw apiError_('not_eligible', 'This line cannot change seller (only tours and transports of this period, not refunded, not a commission exception).');
+      }
+      var man = ss_().getSheetByName(SHEETS.manual) ? manual_() : null;
+      rows.forEach(function (n) { verify_(ent.sheet, n, E.ts + 1, ts); });
+      writes_++;
+      rows.forEach(function (n) { ent.sheet.getRange(n, E.seller + 1).setValue(to.email); });
+      if (man) (man.all[ts] || []).forEach(function (n) { verify_(man.sheet, n, M.ts + 1, ts); man.sheet.getRange(n, M.ts + 2).setValue(to.email); }); // R Seller
+      // Emailed like the old dialog, to the Protect "Auth Base" addresses (B2:B10).
+      var prot = ss_().getSheetByName(SHEETS.protect);
+      var rcpt = prot ? prot.getRange(2, 2, 9, 1).getValues().map(function (x) { return String(x[0]).trim(); }).filter(String) : [];
+      var warn = mailOnce_(op, 'seller', { to: rcpt.length ? rcpt : ALERT_TO, subject: 'Seller Modified',
+        body: 'Line ' + ts + ' (' + String(r[E.obj]) + ', ' + String(r[E.guest]) + ', ' + priceOf_(r) + '): seller ' + (cur || '(none)') + ' → ' + to.email +
+          ', changed by ' + me.username + ' from the reception app.' });
+      var res = { audit: { before: cur, after: to.email, object: String(r[E.obj]), guest: String(r[E.guest]) } };
+      if (warn) res.warning = warn;
+      return res;
+    },
+    /**
+     * Activities editor (Tour / Transport of Data activities), any reception user.
+     * payload: { do: 'add' | 'update' | 'delete', category, name (current name; the new one for add),
+     *   newName (update), price, cost }. Column A..C and the category list change together.
+     */
+    activity: function (op, me) {
+      var p = op.payload || {};
+      parseAt_(op.at);
+      var cat = String(p.category || '');
+      if (ACT_CATS.indexOf(cat) < 0) throw apiError_('bad_payload', 'Only Tour and Transport activities can be edited here');
+      var s = sheet_(SHEETS.catalog), L = actLayout_(s), col = L.lists[cat];
+      var name = String(p.name || '').replace(/\s+/g, ' ').trim();
+      var aRows = function (n) { return rowsWith_(s, L.a, n); };
+      var abc = function (rowNo) { var v = s.getRange(rowNo, L.a, 1, 3).getValues()[0]; return { name: String(v[0]), price: v[1], cost: v[2] }; };
+      var listed = function (n, c) { return rowsWith_(s, c, n).length > 0; };
+      if (p.do === 'add') {
+        var nm = actName_(name), price = actMoney_(p.price, 'price'), cost = actMoney_(p.cost, 'cost', true);
+        var inList = listed(nm, col), inA = aRows(nm);
+        if (inList && inA.length) { // a retry of this add, or the same activity already there
+          var ex = abc(inA[0]);
+          if (num_(ex.price) === price && String(ex.cost === '' ? '' : num_(ex.cost)) === String(cost)) return { already: true };
+          throw apiError_('exists', nm.replace(/^-/, '') + ' is already in ' + cat + '. Change it instead.');
+        }
+        var other = Object.keys(L.lists).filter(function (c) { return c !== cat && listed(nm, L.lists[c]); });
+        if (other.length) throw apiError_('exists', nm.replace(/^-/, '') + ' is already listed under ' + other.join(', '));
+        var before = inA.length ? abc(inA[0]) : null;
+        if (inA.length) { writes_++; inA.forEach(function (n) { s.getRange(n, L.b, 1, 2).setValues([[price, cost]]); }); } // A had it alone: give it its list
+        else appendInCols_(s, L.a, 3, [nm, price, cost]);
+        if (!inList) appendInCols_(s, col, 1, [nm]);
+        return { audit: { before: before, after: { category: cat, name: nm, price: price, cost: cost } } };
+      }
+      if (!name) throw apiError_('bad_payload', 'Which activity?');
+      var lRows = rowsWith_(s, col, name), oldA = aRows(name);
+      if (p.do === 'update') {
+        var nn = p.newName === undefined || p.newName === '' ? name : actName_(p.newName, name.charAt(0) !== '-');
+        var pr = actMoney_(p.price, 'price'), co = actMoney_(p.cost, 'cost', true);
+        if (!lRows.length && !oldA.length) {
+          // A retry after the rename went through: the new name is there with these values.
+          var done = aRows(nn);
+          if (nn !== name && done.length && listed(nn, col)) return { already: true };
+          throw apiError_('not_found', name.replace(/^-/, '') + ' is no longer in ' + cat + ' (changed in the sheet?)');
+        }
+        if (!lRows.length) throw apiError_('not_found', name.replace(/^-/, '') + ' is no longer in ' + cat + ' (changed in the sheet?)');
+        if (nn !== name && (aRows(nn).length || Object.keys(L.lists).some(function (c) { return listed(nn, L.lists[c]); }))) {
+          throw apiError_('exists', 'Another activity is already called ' + nn.replace(/^-/, ''));
+        }
+        var b4 = oldA.length ? abc(oldA[0]) : null;
+        writes_++;
+        if (oldA.length) oldA.forEach(function (n) { s.getRange(n, L.a, 1, 3).setValues([[safe_(nn), pr, co]]); });
+        else appendInCols_(s, L.a, 3, [nn, pr, co]); // listed without a price row: A gets one
+        if (nn !== name) lRows.forEach(function (n) { s.getRange(n, col).setValue(safe_(nn)); });
+        var res = { audit: { before: b4 && { name: b4.name, price: b4.price, cost: b4.cost }, after: { category: cat, name: nn, price: pr, cost: co },
+          cells: { a: oldA, list: nn !== name ? lRows : [] } } };
+        if (nn !== name && commissionExceptions_()[lc_(name)]) res.warning = name + ' is in Commission exceptions (V) under its old name: rename it there too.';
+        return res;
+      }
+      if (p.do === 'delete') {
+        if (!lRows.length) return { already: true };
+        var gone = oldA.length ? abc(oldA[0]) : null;
+        compactOut_(s, col, 1, lRows);
+        // A keeps the name while another list (Service, the other category, Other) still shows it.
+        var still = Object.keys(L.lists).some(function (c) { return listed(name, L.lists[c]); });
+        if (!still && oldA.length) compactOut_(s, L.a, 3, aRows(name));
+        return { audit: { before: gone && { category: cat, name: gone.name, price: gone.price, cost: gone.cost }, cells: { a: still ? [] : oldA, list: lRows } } };
+      }
+      throw apiError_('bad_payload', 'Unknown activity change');
+    },
     /** A guest who is not in Beds24 (walk-in for food, a sunset boat…): added to New guest (C and F), like the old dialog. */
     guest_add: function (op, me) {
       var name = text_((op.payload || {}).name, 60, 'Name');
@@ -2257,7 +2502,7 @@ var UIAPI = (function () {
         var vBefore = version_();
         var pl = op.payload && typeof op.payload === 'object' ? op.payload : {};
         log.appendRow([new Date(), id, text_(body.deviceId, 0), text_(who, 0), text_(op.type, 0),
-          text_(pl.shiftId || pl.saleId || pl.ts || pl.origTs || pl.pid || pl.bill || pl.cid || pl.gid || pl.trip || pl.cfid || pl.did || pl.lid || pl.sid || '', 0), text_(op.at, 0), status, safe_(detail),
+          text_(pl.shiftId || pl.saleId || pl.ts || pl.origTs || pl.pid || pl.bill || pl.cid || pl.gid || pl.trip || pl.cfid || pl.did || pl.lid || pl.sid || pl.name || '', 0), text_(op.at, 0), status, safe_(detail),
           safe_(JSON.stringify(op.payload || {}).slice(0, 45000))]);
         var props_ = PropertiesService.getScriptProperties();
         props_.setProperty('UI_V', String(vBefore + 1));
