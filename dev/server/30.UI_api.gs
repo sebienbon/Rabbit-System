@@ -447,7 +447,7 @@ var UIAPI = (function () {
   // Entries Manual: A..E, H, L, M, N like Entries; O author, P comment, Q timestamp;
   // F, G, J, K hold formulas and are never written.
   var E = { date: 0, type: 1, sub: 2, obj: 3, qty: 4, unit: 5, total: 6, real: 7, author: 8, unitCost: 9,
-    cost: 10, realCost: 11, guest: 12, pay: 13, ts: 14, past: 15, comment: 16, status: 18 };
+    cost: 10, realCost: 11, guest: 12, pay: 13, ts: 14, past: 15, comment: 16, status: 18, seller: 19 };
   var M = { date: 0, type: 1, sub: 2, obj: 3, qty: 4, real: 7, realCost: 11, guest: 12, pay: 13, author: 14, comment: 15, ts: 16 };
   var TS_TZ = 'Asia/Singapore'; // timestamps follow the script timezone of the old dialogs (UTC+8)
   var LINE_DAYS = 21;           // paid lines sent to the device; unpaid ones are always sent
@@ -498,14 +498,23 @@ var UIAPI = (function () {
     ts.forEach(function (r, i) { var t = String(r[0]); if (isTs_(t)) { byTs[t] = i + 2; (all[t] = all[t] || []).push(i + 2); } });
     return { sheet: s, last: last, byTs: byTs, all: all };
   }
-  /** Appends Entries rows (17 columns) after the last data row; timestamps stay text. */
-  function appendEntries_(ent, rows) {
+  /**
+   * Appends Entries rows (17 columns) after the last data row; timestamps stay text.
+   * withSeller: also writes column T (Seller) = the author's email, as the old dialogs did on
+   * sales: the Commis. tab pays 20% of the margin of the lines whose Seller is the staff email.
+   * Only for sales and gear charges (Income): an expense or a cash supply with a Seller would
+   * change that staff's commission.
+   */
+  function appendEntries_(ent, rows, withSeller) {
     if (!rows.length) return;
     writes_++;
     var r = ent.last + 1;
     ent.sheet.getRange(r, E.ts + 1, rows.length, 1).setNumberFormat('@');
     ent.sheet.getRange(r, 1, rows.length, 17).setValues(rows.map(function (row) { return row.map(safe_); }));
     ent.sheet.getRange(r, 1, rows.length, 1).setNumberFormat('dd/MM/yyyy'); // like Entries Manual
+    if (withSeller) ent.sheet.getRange(r, E.seller + 1, rows.length, 1).setValues(rows.map(function (row) {
+      return [row[E.type] === 'Income' && /@/.test(String(row[E.author])) ? row[E.author] : ''];
+    }));
     ent.last += rows.length;
   }
   /** Appends Entries Manual rows from Entries-shaped rows, leaving the formula columns alone. */
@@ -1101,7 +1110,7 @@ var UIAPI = (function () {
         text_(l.guest, 120, 'Guest'), 'Unpaid', lineTs_(l.ts, at), '', text_(l.comment, 300, 'Comment')];
     });
     var ent = entries_(), man = manual_();
-    appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }));
+    appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }), true); // gear charge: Seller
     appendManual_(man, rows.filter(function (r) { return !man.byTs[r[E.ts]]; }));
   }
   function isRentalObj_(obj) {
@@ -1257,7 +1266,7 @@ var UIAPI = (function () {
           throw apiError_('ts_collision', 'The sheet already has a different line with this id. Nothing was written; check with a manager before entering the sale again.');
         }
       });
-      appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }));
+      appendEntries_(ent, rows.filter(function (r) { return !ent.byTs[r[E.ts]]; }), true); // sale: Seller
       appendManual_(man, rows.filter(function (r) { return !man.byTs[r[E.ts]]; }));
       if (gearOut.length || gearSg.length) {
         gearLog_(gearOut);

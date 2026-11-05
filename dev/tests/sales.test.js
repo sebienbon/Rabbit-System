@@ -735,3 +735,16 @@ test('pull with beds24: runs the Beds24 sync first when it is installed, never f
   const ayu = login(env, 'ayu');
   assert.strictEqual(env.call({ action: 'pull', token: ayu, beds24: true }).beds24, null, 'no sync installed: nothing');
 });
+
+test('sale writes Seller (T) = author email for commissions; an expense does not', () => {
+  const env = freshEnv();
+  const t = login(env, 'ayu'); openShift(env, t);
+  const s = sale(['Alice Example'], [{ category: 'Tour', object: '-Horse Riding', qty: 1, unit: 400000, unitCost: 350000 }]);
+  assert.strictEqual(push(env, t, s).results[0].status, 'applied');
+  const row = findE(env, s.payload.lines[0].ts);
+  assert.strictEqual(row[19], 'r1@x', 'Seller = the staff email the Commis. formulas compare');
+  assert.strictEqual(row[19], row[8]);
+  const ex = op('expense', { ts: newTs(), category: 'Other', object: 'Restaurant', amount: 20000, payment: 'Cash', comment: 'x' });
+  assert.strictEqual(push(env, t, ex).results[0].status, 'applied', 'expense applied');
+  assert.ok(!findE(env, ex.payload.ts)[19], 'no Seller on an expense');
+});
