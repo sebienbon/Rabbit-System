@@ -897,11 +897,12 @@ async function renderPartners(root, d) {
   for (const it of pv.items) { if (!groups.has(it.group)) groups.set(it.group, []); groups.get(it.group).push(it.object); }
   const bills = new Map();
   for (const l of pv.lines) if (l.bill) { if (!bills.has(l.bill)) bills.set(l.bill, []); bills.get(l.bill).push(l); }
-  const pt = ui.partner = ui.partner || { object: null, sel: null, cost: {}, confirm: false };
+  // One bill can group several partners (e.g. several Wijaya objects): tap each one to add it.
+  const pt = ui.partner = ui.partner && ui.partner.objects ? ui.partner : { objects: [], sel: new Set(), cost: {}, confirm: false };
   if (ui.billOpen && !bills.has(ui.billOpen)) ui.billOpen = null;
-  if (pt.object && !byObj.has(pt.object)) { pt.object = null; pt.sel = null; }
-  const lines = pt.object ? pending.filter(l => l.object === pt.object) : [];
-  if (pt.object && !pt.sel) pt.sel = new Set(lines.map(l => l.ts));
+  pt.objects = pt.objects.filter(o => byObj.has(o));
+  const lines = pending.filter(l => pt.objects.includes(l.object));
+  const names = pt.objects.map(partnerName).join(' + ');
   const costOf = l => (l.ts in pt.cost ? pt.cost[l.ts] : l.cost); // null while the box is empty
   const chosen = lines.filter(l => pt.sel && pt.sel.has(l.ts));
   const total = chosen.reduce((s, l) => s + billNet({ ...l, cost: costOf(l) || 0 }), 0);
@@ -922,16 +923,17 @@ async function renderPartners(root, d) {
   root.innerHTML = `<div class="partners">
     <section class="card plist">
       <h2>Partners</h2>
-      ${[...groups].map(([g, objs]) => `<h3 class="sub">${esc(g)}</h3><div class="pbtns">${objs.map(o => `<button type="button" class="pbtn${pt.object === o ? ' on' : ''}" data-pobj="${esc(o)}"${byObj.has(o) ? '' : ' disabled'}>
+      ${[...groups].map(([g, objs]) => `<h3 class="sub">${esc(g)}</h3><div class="pbtns">${objs.map(o => `<button type="button" class="pbtn${pt.objects.includes(o) ? ' on' : ''}" data-pobj="${esc(o)}" aria-pressed="${pt.objects.includes(o)}"${byObj.has(o) ? '' : ' disabled'}>
         <span>${esc(partnerName(o))}</span>${byObj.has(o) ? `<span class="count">${byObj.get(o)}</span>` : ''}</button>`).join('')}</div>`).join('')}
     </section>
     <div class="col">
       <section class="card">
-        ${pt.object ? `<h2>${esc(partnerName(pt.object))} — not billed yet</h2>
+        ${pt.objects.length ? `<h2>${esc(names)} — not billed yet</h2>
+          <p class="muted small">${pt.objects.length > 1 ? 'One bill for these partners.' : 'Tap other partners to put them on the same bill.'}</p>
           <div class="row"><button class="link" type="button" data-pall>Select all</button><button class="link" type="button" data-pnone>Unselect all</button></div>
-          ${lineTable(lines, true)}
+          ${pt.objects.length > 1 ? pt.objects.map(o => `<h3 class="sub pgroup">${esc(partnerName(o))}</h3>${lineTable(lines.filter(l => l.object === o), true)}`).join('') : lineTable(lines, true)}
           <div class="ctotal"><span>${chosen.length} line${chosen.length === 1 ? '' : 's'} · ${total >= 0 ? 'we owe the partner' : 'the partner owes us'}</span><b class="num">Rp ${money(Math.abs(total))}</b></div>
-          ${pt.confirm ? `<div class="inline warn"><span>Create the bill for ${esc(partnerName(pt.object))}: ${chosen.length} line${chosen.length === 1 ? '' : 's'}, ${esc(owe(total))}? The PDF is emailed as before.</span>
+          ${pt.confirm ? `<div class="inline warn"><span>Create the bill for ${esc(names)}: ${chosen.length} line${chosen.length === 1 ? '' : 's'}, ${esc(owe(total))}? The PDF is emailed as before.</span>
             <button class="primary small" type="button" data-pcreate>Create bill</button><button class="ghost small" type="button" data-pcancel>Cancel</button></div>`
             : `<button class="primary wide" type="button" data-preview${chosen.length ? '' : ' disabled'}>Create bill</button>`}
           <p class="error" role="alert"></p>`
@@ -972,7 +974,12 @@ async function renderPartners(root, d) {
   root.addEventListener('click', async e => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.pobj) { ui.partner = { object: b.dataset.pobj, sel: null, cost: {}, confirm: false }; d.render(); }
+    if (b.dataset.pobj) {
+      const o = b.dataset.pobj, objLines = pending.filter(l => l.object === o);
+      if (pt.objects.includes(o)) { pt.objects = pt.objects.filter(x => x !== o); objLines.forEach(l => pt.sel.delete(l.ts)); }
+      else { pt.objects.push(o); objLines.forEach(l => pt.sel.add(l.ts)); }
+      pt.confirm = false; d.render();
+    }
     else if (b.dataset.pall !== undefined) { pt.sel = new Set(lines.map(l => l.ts)); d.render(); }
     else if (b.dataset.pnone !== undefined) { pt.sel = new Set(); d.render(); }
     else if (b.dataset.preview !== undefined) {
@@ -985,7 +992,7 @@ async function renderPartners(root, d) {
       b.disabled = true;
       const bill = newBillId(new Set(pv.lines.map(l => l.bill).filter(Boolean)));
       await enqueue('partner_bill', { bill, items: chosen.map(l => ({ ts: l.ts, cost: costOf(l) })) });
-      ui.notice = `Bill created for ${partnerName(pt.object)}: ${owe(total)}. The PDF is emailed by the sheet.`;
+      ui.notice = `Bill created for ${names}: ${owe(total)}. The PDF is emailed by the sheet.`;
       ui.partner = null; ui.billOpen = bill;
       d.render();
     }

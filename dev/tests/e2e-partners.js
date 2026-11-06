@@ -107,6 +107,26 @@ const step = m => console.log('  ✓ ' + m);
     assert.match(await page.textContent('[data-pobj="-Shuttle Bangsal / Kuta"]'), /1/);
     step('old bill printed, then deleted: its line is back in "not billed"');
 
+    // ---- one bill for two partners ----
+    await tab('sell');
+    await page.click('#guestIn'); await page.keyboard.type('Dee Multi'); await page.keyboard.press('Enter');
+    await page.click('button.prod:has-text("Horse Riding")');
+    await page.click('[data-pay="Cash"]'); await page.click('#recordSale');
+    await waitNotice(/Sale recorded/);
+    await waitStrip(/Connected/);
+    await tab('partners');
+    await page.click('[data-pobj="-Shuttle Bangsal / Kuta"]');
+    await page.click('[data-pobj="-Horse Riding"]');
+    await page.waitForFunction(() => document.querySelectorAll('h3.pgroup').length === 2);
+    assert.match(await page.textContent('.partners .col h2'), /\+/);
+    await page.screenshot({ path: `${shots}/p05-two-partners.png`, fullPage: true });
+    await page.click('[data-preview]'); await page.click('[data-pcreate]');
+    await waitNotice(/Bill created for .*\+/);
+    await waitStrip(/Connected/);
+    const b1 = byGuest('Cy')[18], b2 = byGuest('Dee Multi')[18];
+    assert.ok(b1 && b1 === b2, 'both partners on the same bill: ' + b1 + ' / ' + b2);
+    step('one bill for two partners');
+
     assert.deepStrictEqual(errors, []);
     step('no errors in the browser console');
     console.log('\nE2E PARTNERS OK');

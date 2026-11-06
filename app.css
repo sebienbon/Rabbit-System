@@ -683,3 +683,7 @@ h3.sub .help-pop { left: -4px; }
 .pay[data-sfpay="Paid to Partner"] { --i: var(--i-users); }
 .pay[data-sfpay="Unpaid"]::before { width: 22px; height: 22px; -webkit-mask: none; mask: none; background: url(img/unpaid.webp) center / contain no-repeat; }
 .shiftfilter .pay.noicon::before { display: none; }
+
+/* Partners: one bill for several partners */
+.partners h3.pgroup { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.partners p.small { font-size: .85rem; margin: -4px 0 6px; }
