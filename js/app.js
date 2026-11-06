@@ -448,8 +448,9 @@ async function boot() {
   onStatus(renderStrip);
   onStatus((s, evt) => { if (evt && (evt.pulled || evt.pushed)) afterSync(); });
   ui.user = await currentUser();
-  // A manager's session is never restored when the app starts: the password is asked again.
-  if (ui.user && ui.user.role !== 'staff') {
+  // On the reception computer a manager's session is never restored when the app starts (staff must
+  // not inherit manager rights): the password is asked again. On a manager's own phone/laptop it stays.
+  if (ui.user && ui.user.role !== 'staff' && await isRegistered()) {
     const name = ui.user.username;
     await logout(ui.user); // its session stays only to send what is waiting, revoked once sent
     ui.user = null; ui.pickedUser = name; ui.notice = 'Type your password again to continue.';
