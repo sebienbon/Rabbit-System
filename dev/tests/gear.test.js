@@ -45,7 +45,8 @@ const gearOf = (env, token) => env.call({ action: 'pull', token }).gear;
 const item = (g, x) => g.items.find(i => i.id === x);
 function openShift(env, token) { assert.strictEqual(push(env, token, op('shift_open', { shiftId: 'S' + (++n), cashCounted: 1000000 })).results[0].status, 'applied'); }
 function rent(env, token, guest, numbers, days, payment = 'Unpaid', at) {
-  const lines = numbers.map(g => ({ ts: newTs(), guest, category: 'Service', object: g.startsWith('B') ? 'Rabbit bike' : 'Snorkeling Mask', qty: days, unit: 30000, unitCost: 0, comment: g, gear: g }));
+  let k = 0; // line ids near the operation time, like a real device
+  const lines = numbers.map(g => ({ ts: at ? tsAt(Date.parse(at) + k++) : newTs(), guest, category: 'Service', object: g.startsWith('B') ? 'Rabbit bike' : 'Snorkeling Mask', qty: days, unit: 30000, unitCost: 0, comment: g, gear: g }));
   return push(env, token, op('sale', { saleId: 'V' + lines[0].ts, payment, lines }, at));
 }
 
@@ -365,4 +366,22 @@ test('Seb 03/11: a number handed to the gear staff but not out is checked by the
   const c = push(env, ayu, op('gear_confirm', { cfid: id('F'), diff: d.id, action: 'found' }));
   assert.strictEqual(c.results[0].status, 'applied');
   assert.ok(!gearOf(env, ayu).diffs.some(x => x.id === d.id));
+});
+
+test('Seb 06/11: reception staff accounts work in the gear app (blind there); two different people confirm a difference', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  const pull = env.call({ action: 'pull', token: ayu, app: 'gear' });
+  assert.ok(pull.ok !== false && pull.gear && pull.gear.items.every(i => Object.keys(i).join() === 'id,kind'), 'blind view');
+  assert.strictEqual(pull.catalog, undefined, 'only the gear part');
+  rent(env, ayu, 'Ann', ['SG001'], 1);
+  const all = gearOf(env, made).items.map(i => i.id);
+  const r = push(env, ayu, op('gear_count', { cid: id('K'), items: all.map(x => ({ item: x, condition: 'OK' })), app: 'gear' }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  const df = gearOf(env, made).diffs.find(d => d.item === 'SG001');
+  assert.ok(df && df.kind === 'counted_but_out', JSON.stringify(gearOf(env, made).diffs));
+  assert.strictEqual(push(env, ayu, op('gear_confirm', { cfid: id('F'), diff: df.id, action: 'here', app: 'gear' })).results[0].status, 'applied');
+  const same = push(env, ayu, op('gear_confirm', { cfid: id('F'), diff: df.id, action: 'onsite' })).results[0];
+  assert.strictEqual(same.error, 'bad_payload', 'the same person cannot confirm both sides');
+  assert.strictEqual(push(env, ayu, op('gear_count', { cid: id('K'), items: [] })).results[0].error, 'forbidden', 'without the gear app flag');
 });

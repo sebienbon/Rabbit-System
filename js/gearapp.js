@@ -2,8 +2,10 @@
 // and the differences to solve with the reception. Runs on a phone, with its own local
 // database (window.RABBIT_DB), and works offline: everything waits in the outbox.
 import { login, logout, currentUser, outboxOwners, cleanupTokens } from './auth.js';
-import { onStatus, startSync, enqueue, pullNow, pushNow, waitingCount, dismissRejected, warnOtherOutboxes, opDetails, copyText, status as syncStatus, CLOCK_WARN_MS } from './sync.js';
+import { onStatus, startSync, enqueue as enqueueOp, pullNow, pushNow, waitingCount, dismissRejected, warnOtherOutboxes, opDetails, copyText, status as syncStatus, CLOCK_WARN_MS } from './sync.js';
 import { db } from './db.js';
+// Every operation says it comes from the gear app: reception accounts also work here.
+const enqueue = (type, payload) => enqueueOp(type, { ...payload, app: 'gear' });
 import { CONFIG } from './config.js';
 import { gearView, checkDue, notifyOnce, fmtWhen } from './gearcore.js';
 
@@ -381,7 +383,6 @@ async function boot() {
     if (evt && (evt.pulled || evt.pushed) && !busy()) render();
   });
   ui.user = await currentUser();
-  if (ui.user && ui.user.role !== 'gear') { await logout(ui.user); ui.user = null; }
   await cleanupTokens().catch(() => {}); // a session nobody needs any more (nothing waiting) is revoked
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
   await render();

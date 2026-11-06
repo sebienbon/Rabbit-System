@@ -97,7 +97,7 @@ export async function login(username, password, { register = false, gearApp = fa
     });
     if (register && !r.registered) throw new ApiError('not_allowed', 'Only a manager can register this computer.');
     // Each app has its own accounts: refused before anything is stored on this device.
-    if ((r.user.role === 'gear') !== gearApp) {
+    if (r.user.role === 'gear' && !gearApp) { // gear accounts only in the gear app; any other account may use both
       api('logout', { token: r.token }, 8000).catch(() => {});
       throw new ApiError('wrong_app', gearApp ? 'Akun ini untuk resepsi. Gunakan akun staf gear.' : 'Gear staff accounts use the gear app (gear.html), not the reception.');
     }

@@ -139,7 +139,7 @@ async function doPull(opts = {}) {
   const token = (await db.get('deviceToken')) || await reconnect((await db.get('currentUser') || {}).username);
   if (!token) return;
   try {
-    const r = await api('pull', { token, beds24: !!opts.beds24 }, opts.beds24 ? 90000 : undefined);
+    const r = await api('pull', { token, beds24: !!opts.beds24, app: globalThis.RABBIT_APP || 'reception' }, opts.beds24 ? 90000 : undefined);
     lastBeds24 = r.beds24 || null;
     const v = (r.shift && r.shift.v) || 0;
     const applied = await db.all('applied');
