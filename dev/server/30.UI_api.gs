@@ -360,7 +360,7 @@ var UIAPI = (function () {
   function pull(body) {
     var sess = session_(body.token);
     var me = auth_(sess);
-    if (me.role === 'gear') { // the gear app sees only what the blind check allows
+    if (me.role === 'gear' || body.app === 'gear') { // the gear app sees only what the blind check allows (any account used in it)
       return { me: publicUser_(me), registered: !!sess.reg, serverTime: new Date().toISOString(), shift: { v: version_() },
         gear: ss_().getSheetByName(SHEETS.sg) ? gearForStaffApp_(gearState_(), null) : null };
     }
@@ -1083,6 +1083,8 @@ var UIAPI = (function () {
     ['Bike rental product', 'Rabbit bike', 'name in Data activities'], ['Manager WhatsApp', '', 'number in column B, e.g. +62 812…']];
   var GEAR_CONDITIONS = ['OK', 'Snorkel missing', 'Ring missing', 'Mask missing', 'Part missing', 'Broken', 'Other', 'Lost'];
   var gnote_ = function (v) { return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 300); }; // comment on a damage
+  /** An operation made in the gear app: by a gear account, or by any account logged in there. */
+  function gearSide_(me, p) { return me.role === 'gear' || !!(p && p.app === 'gear'); }
   var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1, gear_return: 1 }; // what the gear role may send
   /**
    * SG tab, our own layout: A number, B type (Mask / Bike), C in use (untick to retire a number)
@@ -1258,7 +1260,7 @@ var UIAPI = (function () {
         if (e.d.kind === 'sale_unlinked') { diffs[e.id].reason = e.d.reason || ''; diffs[e.id].saleTs = e.d.saleTs || ''; diffs[e.id].guest = e.d.guest || ''; diffs[e.id].object = e.d.object || ''; }
       } else if (e.type === 'confirm') {
         var df = diffs[e.ref];
-        if (df) { df[e.d.side] = true; if (e.d.note) df.note = e.d.note; if (df.reception && df.gear) df.closed = true; }
+        if (df) { df[e.d.side] = true; df[e.d.side + 'By'] = e.by; if (e.d.note) df.note = e.d.note; if (df.reception && df.gear) df.closed = true; }
       } else if (e.type === 'lost') {
         var dl = diffs[e.ref]; if (dl) dl.closed = true;
         if (it) { it.where = 'lost'; it.condition = 'Lost'; }
@@ -2164,7 +2166,7 @@ var UIAPI = (function () {
       var p = op.payload || {};
       var at = parseAt_(op.at);
       needSheets_([SHEETS.gearLog]); // checked before any write (a charge is written before the log)
-      if (me.role === 'gear') return gearStaffReturn_(op, me, p, at);
+      if (gearSide_(me, p)) return gearStaffReturn_(op, me, p, at);
       assertGearDesk_(me);
       var gid = String(p.gid || ''); if (!/^G[\w-]{6,40}$/.test(gid)) throw apiError_('bad_payload', 'Invalid id');
       var st = gearState_(), done = {}, set = gearSettings_();
@@ -2291,10 +2293,13 @@ var UIAPI = (function () {
       needSheets_([SHEETS.gearLog]); // checked before any write (a charge is written before the log)
       var cfid = String(p.cfid || ''); if (!/^F[\w-]{6,40}$/.test(cfid)) throw apiError_('bad_payload', 'Invalid id');
       if (gearEventDone_(cfid)) return { already: true };
-      var side = me.role === 'gear' ? 'gear' : 'reception';
+      var side = gearSide_(me, p) ? 'gear' : 'reception';
       if (side === 'reception') assertCashRight_(me);
       var st = gearState_(), df = st.diffs.filter(function (d) { return d.id === String(p.diff); })[0];
       if (!df) throw apiError_('line_not_found', 'This difference is already closed');
+      // Both sides confirm: two different people (staff accounts work in both apps).
+      var other = df[(side === 'gear' ? 'reception' : 'gear') + 'By'];
+      if (other && other === me.username) throw apiError_('bad_payload', 'Someone else must confirm the other side');
       var rows = [], charges = [], warn = [];
       if (side === 'reception' && df.kind === 'counted_but_out') {
         var it = gearItem_(st, df.item);
@@ -2535,7 +2540,7 @@ var UIAPI = (function () {
           var a = actor_(op, sessionUser, sess, body.deviceId);
           who = a.user.username + (a.via === 'session' ? '' : ' (' + a.via + ')');
           if (a.user.role === 'gear' && !GEAR_OPS[op.type]) throw apiError_('forbidden', 'The gear account only does the gear checks');
-          if (a.user.role !== 'gear' && (op.type === 'sunset_out' || op.type === 'sunset_back' || op.type === 'gear_count')) throw apiError_('forbidden', 'Done by the gear staff in their app');
+          if (!gearSide_(a.user, op.payload) && (op.type === 'sunset_out' || op.type === 'sunset_back' || op.type === 'gear_count')) throw apiError_('forbidden', 'Done by the gear staff in their app');
           var h = HANDLERS[op.type];
           if (!h) throw apiError_('unknown_type', 'Unknown operation ' + op.type);
           writes_ = 0;
