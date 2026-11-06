@@ -670,3 +670,16 @@ h3.sub .help-pop { left: -4px; }
   .alist > li { grid-template-columns: minmax(0, 1fr) 90px 64px; }
   .alist > li > :nth-child(3), .alist > li > :nth-child(4) { display: none; }
 }
+
+/* This shift: filter by payment type */
+.shiftfilter { margin: 4px 0 10px; }
+.shiftfilter .pay .cnt { display: inline-block; min-width: 1.4em; margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--line); font-size: .78em; font-weight: 700; text-align: center; }
+.shiftfilter .pay.on .cnt { background: rgba(255,255,255,.3); }
+.shiftfilter .pay:disabled { opacity: .45; cursor: default; }
+.filtertotal { margin: 0 0 8px; color: var(--ink-soft); font-size: .9rem; }
+.pay[data-sfpay="Cash"] { --i: var(--i-cash); }
+.pay[data-sfpay="Credit / Debit Card"] { --i: var(--i-card); }
+.pay[data-sfpay="Transfer/Others"] { --i: var(--i-swap); }
+.pay[data-sfpay="Paid to Partner"] { --i: var(--i-users); }
+.pay[data-sfpay="Unpaid"]::before { width: 22px; height: 22px; -webkit-mask: none; mask: none; background: url(img/unpaid.webp) center / contain no-repeat; }
+.shiftfilter .pay.noicon::before { display: none; }

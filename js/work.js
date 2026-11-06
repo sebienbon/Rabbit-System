@@ -614,19 +614,40 @@ function renderBill(root, d, guest) {
 }
 
 // ---------------------------------------------------------------- this shift
+const SHIFT_ICONS = ['Cash', 'Credit / Debit Card', 'Transfer/Others', 'Unpaid', 'Paid to Partner'];
 function renderShiftLines(root, d) {
+  const { ui } = d;
   const mine = shiftLines(d.lines, d.shift);
   const t = totals(mine);
   const rows = (obj, sign) => Object.entries(obj).sort((a, b) => b[1] - a[1])
     .map(([k, v]) => `<div><dt>${esc(payLabel(k))}</dt><dd class="num">${sign}${money(v)}</dd></div>`).join('');
+  // Filter by payment type: the list of Data activities (Payment type), plus any other type found in the lines.
+  const types = [...d.payments];
+  mine.forEach(l => { if (l.payment && !types.includes(l.payment)) types.push(l.payment); });
+  if (ui.shiftPay && !types.includes(ui.shiftPay)) ui.shiftPay = null;
+  const count = p => mine.filter(l => l.payment === p).length;
+  const shown = ui.shiftPay ? mine.filter(l => l.payment === ui.shiftPay) : mine;
+  const sum = obj => Object.values(obj).reduce((a, b) => a + b, 0);
+  const ft = totals(shown);
   root.innerHTML = `<section class="card">
     <div class="split">
       <div><h3 class="sub">Sales</h3><dl class="figures compact">${rows(t.income, '') || '<p class="muted">None yet.</p>'}</dl></div>
       <div><h3 class="sub">Paid out</h3><dl class="figures compact">${rows(t.expense, '−') || '<p class="muted">None.</p>'}</dl></div>
     </div>
     <h3 class="sub">Lines in this shift</h3>
-    ${mine.length ? `<ul class="lines">${mine.map(l => lineRow(l, d)).join('')}</ul>` : '<p class="muted">Nothing recorded in this shift yet.</p>'}
+    ${mine.length ? `<div class="pays shiftfilter" role="group" aria-label="Show lines paid with">
+        <button type="button" class="pay noicon${ui.shiftPay ? '' : ' on'}" data-sfpay="" aria-pressed="${!ui.shiftPay}">All <span class="cnt">${mine.length}</span></button>
+        ${types.map(p => `<button type="button" class="pay${SHIFT_ICONS.includes(p) ? '' : ' noicon'}${ui.shiftPay === p ? ' on' : ''}" data-sfpay="${esc(p)}" aria-pressed="${ui.shiftPay === p}"${count(p) ? '' : ' disabled'}>${esc(payLabel(p))} <span class="cnt">${count(p)}</span></button>`).join('')}
+      </div>
+      ${ui.shiftPay ? `<p class="filtertotal">${esc(payLabel(ui.shiftPay))}: in <b class="num">Rp ${money(sum(ft.income))}</b> · out <b class="num">Rp ${money(sum(ft.expense))}</b></p>` : ''}
+      <ul class="lines">${shown.map(l => lineRow(l, d)).join('')}</ul>` : '<p class="muted">Nothing recorded in this shift yet.</p>'}
   </section>`;
+  root.querySelector('.shiftfilter')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-sfpay]');
+    if (!b || b.disabled) return;
+    ui.shiftPay = b.dataset.sfpay || null;
+    renderShiftLines(root, d);
+  });
   bindLineActions(root, d);
 }
 
