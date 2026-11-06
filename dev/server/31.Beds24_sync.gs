@@ -105,6 +105,44 @@ var B24 = (function () {
   /** A payment line marked Unpaid in Beds24 is not a payment. */
   function fakeUnpaid_(i) { return key_(i.status) === key_(PAY_UNPAID); }
   /** Paid to the channel: Airbnb, Expedia Collect. */
+  /**
+   * Who to write in Entries I (Author). Everybody shares one Beds24 login, so Beds24 cannot say
+   * which receptionist typed a line: the receptionist whose shift was open at that moment did
+   * (one shift open at a time, UI_Shifts). A booking made online is written "Beds24 · <channel>".
+   */
+  var shiftsCache_ = null;
+  function shifts_() {
+    if (shiftsCache_) return shiftsCache_;
+    var sh = ss_().getSheetByName('UI_Shifts'), out = [];
+    if (sh && sh.getLastRow() >= 2) sh.getRange(2, 1, sh.getLastRow() - 1, 11).getValues().forEach(function (r) {
+      var from = r[3] instanceof Date ? r[3] : null, to = r[6] instanceof Date ? r[6] : null;
+      if (from && /@/.test(String(r[2]))) out.push({ author: String(r[2]), from: from.getTime(), to: to ? to.getTime() : Infinity });
+    });
+    return (shiftsCache_ = out);
+  }
+  function onShift_(when) {
+    if (!(when instanceof Date) || isNaN(when.getTime())) return null;
+    var t = when.getTime(), hit = null;
+    shifts_().forEach(function (s) { if (s.from <= t && t <= s.to) hit = s.author; }); // latest one wins
+    return hit;
+  }
+  function utc_(s) {
+    if (!s || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(String(s))) return null;
+    try { return Utilities.parseDate(String(s).replace('T', ' ').slice(0, 19), 'UTC', 'yyyy-MM-dd HH:mm:ss'); } catch (e) { return null; }
+  }
+  /** Online channel of a booking ('' when it was made at the reception: referer "Rabbit" or empty). */
+  function channel_(b) {
+    var r = String(b.referer || '').trim();
+    return !r || /rabbit|direct/i.test(r) ? '' : r;
+  }
+  function bookingAuthor_(b) {
+    var ch = channel_(b);
+    if (ch) return 'Beds24 · ' + ch;
+    return onShift_(utc_(b.bookingTime)) || AUTHOR;
+  }
+  function paymentAuthor_(b, item) {
+    return onShift_(utc_(item.createTime)) || (channel_(b) ? 'Beds24 · ' + channel_(b) : AUTHOR);
+  }
   function prepaid_(b) {
     if (/airbnb/i.test(String(b.referer || ''))) return 'Airbnb';
     if (/expedia\s*collect/i.test(String(b.rateDescription || ''))) return 'Expedia Collect';
@@ -276,7 +314,7 @@ var B24 = (function () {
         }
         if (ctl.rows[k]) imported.push(ctl.rows[k]);
         act('Import payment from Beds24', b, guest + ' · ' + room + ' · ' + amount + ' · ' + how);
-        newRows.push({ bookId: id, lineId: lineId, guest: guest, room: room, amount: amount, pay: how,
+        newRows.push({ bookId: id, lineId: lineId, guest: guest, room: room, amount: amount, pay: how, author: paymentAuthor_(b, i),
           date: i.createTime ? Utilities.parseDate(String(i.createTime), 'UTC', 'yyyy-MM-dd HH:mm:ss') : new Date(),
           comment: 'From Beds24' + (i.description ? ': ' + String(i.description).slice(0, 80) : '') });
         knownIds[lineId] = true;
@@ -295,10 +333,10 @@ var B24 = (function () {
       var channel = prepaid_(b);
       if (due > 0.5 && channel) {
         act('Record prepaid (' + channel + ')', b, guest + ' · ' + room + ' · ' + due + ' · ' + transferMode_());
-        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: transferMode_(), date: new Date(), comment: 'Paid to ' + channel });
+        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: transferMode_(), author: bookingAuthor_(b), date: new Date(), comment: 'Paid to ' + channel });
       } else if (due > 0.5) {
         act('Create Unpaid line', b, guest + ' · ' + room + ' · ' + due + (b._linked ? ' (extension)' : ''));
-        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: PAY_UNPAID, date: new Date(), comment: 'From Beds24: still to pay' + (b._linked ? ' (extension, booking ' + id + ')' : '') });
+        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: PAY_UNPAID, author: bookingAuthor_(b), date: new Date(), comment: 'From Beds24: still to pay' + (b._linked ? ' (extension, booking ' + id + ')' : '') });
       } else if (due < -0.5) {
         issues.push([id, guest, 'More paid than charged', String(-due)]);
       }
@@ -316,7 +354,7 @@ var B24 = (function () {
     rows.forEach(function (x) {
       var ts = newTs_();
       var dateOnly = Utilities.parseDate(ymd_(x.date), TS_TZ, 'yyyy-MM-dd');
-      var row = [dateOnly, 'Income', 'Room', x.room, '', '', '', x.amount, AUTHOR, '', '', '', x.guest, x.pay, ts, '', x.comment];
+      var row = [dateOnly, 'Income', 'Room', x.room, '', '', '', x.amount, x.author || AUTHOR, '', '', '', x.guest, x.pay, ts, '', x.comment];
       var r = ent.last + 1;
       ent.sheet.getRange(r, E.ts + 1).setNumberFormat('@');
       ent.sheet.getRange(r, 1, 1, 17).setValues([row.map(safe_)]);
@@ -328,7 +366,7 @@ var B24 = (function () {
         man.getRange(mr, M.ts + 1).setNumberFormat('@');
         man.getRange(mr, 1, 1, 5).setValues([[dateOnly, 'Income', 'Room', safe_(x.room), '']]);
         man.getRange(mr, 8).setValue(x.amount);
-        man.getRange(mr, 12, 1, 6).setValues([['', safe_(x.guest), x.pay, AUTHOR, safe_(x.comment), ts]]);
+        man.getRange(mr, 12, 1, 6).setValues([['', safe_(x.guest), x.pay, x.author || AUTHOR, safe_(x.comment), ts]]);
         man.getRange(mr, 1).setNumberFormat('dd/MM/yyyy');
       }
     });
