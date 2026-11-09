@@ -15,6 +15,18 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const time = iso => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
 const dayTime = iso => iso ? new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 
+// Where the bar POS runs, for THIS computer (owner 09/11): the POS's own computer by default (CONFIG.POS_URL, localhost);
+// another computer of the wifi opens the app once with ?pos=http://<address>:8080 (kept here), ?pos=local to forget it.
+const POS_KEY = 'rabbitPosUrl';
+let posSaved = null;
+(() => {
+  const q = new URLSearchParams(location.search).get('pos');
+  if (q === null) return;
+  try { if (/^https?:\/\/[\w.-]+(:\d+)?\/?$/i.test(q)) { localStorage.setItem(POS_KEY, q.replace(/\/$/, '')); posSaved = q; } else localStorage.removeItem(POS_KEY); } catch { /* private mode */ }
+  history.replaceState(null, '', location.pathname + location.hash);
+})();
+const posUrl = () => { try { return localStorage.getItem(POS_KEY) || CONFIG.POS_URL; } catch { return CONFIG.POS_URL; } };
+
 const ui = { user: null, pickedUser: null, typedUser: false, closing: null, notice: null, busy: false, tab: 'sell' };
 const main = () => $('#main');
 let noticeShown = null; // { text, until }
@@ -393,7 +405,7 @@ async function renderNow() {
   $('#who').innerHTML = `<button type="button" class="refresh" id="refreshBtn" title="Refresh now: Beds24 and the sheet" aria-label="Refresh now">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
     <span>${esc(ui.user.name)}${ui.user.role !== 'staff' ? ` <em>${esc(ui.user.role)}</em>` : ''}</span>
-    ${CONFIG.POS_URL ? '<button class="ghost small" id="posBtn" title="Open the bar POS, logged in as you">Bar POS</button>' : ''}
+    ${posUrl() ? `<button class="ghost small" id="posBtn" title="Open the bar POS (${esc(posUrl())}), logged in as you">Bar POS</button>` : ''}
     <button class="ghost small" id="logout">Log out</button>`;
   // One login (owner 09/11): a one-time pass from the sheet, valid 2 minutes, opens the POS as this user.
   if ($('#posBtn')) $('#posBtn').onclick = async () => {
@@ -401,9 +413,9 @@ async function renderNow() {
     if (!w) { ui.notice = 'The browser blocked the new window: allow pop-ups for this site, then press Bar POS again.'; render(); return; }
     try {
       const { pass } = await api('pos_pass', { token: await tokenFor(ui.user.username) }, 15000);
-      w.location.href = `${CONFIG.POS_URL}/sso.html#${pass}`;
+      w.location.href = `${posUrl()}/sso.html#${pass}`;
     } catch (e) {
-      w.location.href = CONFIG.POS_URL;
+      w.location.href = posUrl();
       ui.notice = e.network ? 'No internet: the bar POS opens, log in there with your PIN.' : `Bar POS: ${e.message}`; render();
     }
   };
@@ -471,6 +483,7 @@ async function boot() {
   }
   // A manager's session left from before (nobody logged in, nothing waiting): revoked now.
   await cleanupTokens().catch(() => {});
+  if (posSaved) ui.notice = `Bar POS on this computer: ${posSaved}`;
   // Opened by the POS's "Reception" button (owner 09/11): a one-time pass logs that person in. Never replaces
   // someone already logged in here (the reception is not logged out).
   const pass = (location.hash.match(/^#pass=([a-z0-9]{20,80})$/i) || [])[1];
