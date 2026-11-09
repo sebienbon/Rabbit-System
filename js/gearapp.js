@@ -38,6 +38,52 @@ const waLink = (num, text) => `https://wa.me/${String(num || '').replace(/\D/g, 
 
 const ui = { user: null, screen: 'home', sel: new Set(), count: null, later: {}, sure: false, notice: '' };
 
+// ---------- drafts: what is being touched survives a lost connection, a reload, "back" ----------
+// (09/11: a check half done was lost.) Each screen keeps its own picks in the phone's storage,
+// per user, for 6 hours; going to the menu and back finds them again. Cleared when saved.
+const DRAFT_MS = 6 * 3600000;
+const draftKey = () => `${window.RABBIT_DB || 'rabbit'}:drafts:${ui.user ? ui.user.username || ui.user.name : ''}`;
+function loadDrafts() {
+  try {
+    const all = JSON.parse(localStorage.getItem(draftKey()) || '{}');
+    for (const k of Object.keys(all)) if (k !== 'screen' && !(all[k] && Date.now() - all[k].at < DRAFT_MS)) delete all[k];
+    return all;
+  } catch { return {}; }
+}
+function saveDraft() {
+  if (!ui.user || tourRunning()) return;
+  const all = loadDrafts(), c = ui.count;
+  const has = ui.sel.size || (c && Object.keys(c.items).length);
+  if (has) all[ui.screen] = { at: Date.now(), sel: [...ui.sel], count: c ? { items: c.items, notes: c.notes, open: c.open || {}, review: !!c.review, bulkOk: !!c.bulkOk } : null };
+  else delete all[ui.screen];
+  all.screen = ui.screen;
+  try { localStorage.setItem(draftKey(), JSON.stringify(all)); } catch { /* storage full or blocked */ }
+}
+function dropDraft(screen) {
+  const all = loadDrafts(); delete all[screen];
+  try { localStorage.setItem(draftKey(), JSON.stringify(all)); } catch { /* ignore */ }
+}
+// Opens a screen with its draft (if any). Returns how many numbers were found again.
+function openScreen(screen) {
+  ui.screen = screen; ui.sel = new Set(); ui.sure = false; ui.count = null;
+  const d = loadDrafts()[screen];
+  if (!d) return 0;
+  ui.sel = new Set(d.sel || []);
+  if (d.count) ui.count = { ...newPick(), ...d.count, review: false, bulkAsk: false };
+  return ui.sel.size + (ui.count ? Object.keys(ui.count.items).length : 0);
+}
+const DRAFT_SCREENS = ['sunset', 'count', 'ret'];
+function goScreen(screen, push = true) {
+  if (ui.screen !== 'home' && push !== 'pop') saveDraft();
+  const n = DRAFT_SCREENS.includes(screen) ? openScreen(screen) : (openScreen(screen), 0);
+  if (n) ui.notice = `${n} pilihan sebelumnya dipulihkan. Lanjutkan, atau tekan “Mulai dari awal”.`;
+  // Android "back" comes back to the menu instead of leaving the app.
+  if (push === true && screen !== 'home') { try { history.pushState({ gear: screen }, ''); } catch { /* ignore */ } }
+  saveDraft();
+}
+addEventListener('popstate', () => { if (ui.user && !tourRunning() && ui.screen !== 'home') { saveDraft(); goScreen('home', 'pop'); render(); scrollTo(0, 0); } });
+
+
 // ---------- sync strip ----------
 function renderStrip(s) {
   const el = $('#sync'), n = s.pending;
@@ -87,7 +133,7 @@ async function renderLogin() {
     b.disabled = true; b.textContent = 'Memeriksa…';
     try {
       const user = await login(u, p, { gearApp: true });
-      ui.user = user; ui.notice = '';
+      ui.user = user; ui.notice = ''; resumeDraft();
       b.textContent = 'Memuat…'; await pullNow(); pushNow();
       render();
     } catch (err) {
@@ -191,6 +237,7 @@ function sunset(g) {
       <p class="muted">Berangkat ${hhmm(open.at)} · ${open.items.length} masker. Sentuh masker yang sudah kembali, lalu Lanjut untuk kondisinya.</p>
       ${touchGrids(g, c, its)}
       <button type="button" class="primary wide" data-next>Lanjut (${backN}/${open.items.length})</button>
+      ${backN ? '<button type="button" class="ghost small" data-restart>Mulai dari awal</button>' : ''}
     </div>`;
   }
   const masks = g.items.filter(i => i.kind === 'mask' && !(g.unavailable || []).includes(i.id));
@@ -201,6 +248,7 @@ function sunset(g) {
     ${grid(masks, 'six', it => ui.sel.has(it.id) ? 'on' : '')}
     ${n && n !== g.sunsetSales ? `<p class="muted small">${n} masker untuk ${g.sunsetSales} tamu tercatat (${n > g.sunsetSales ? '+' : '−'}${Math.abs(n - g.sunsetSales)}).</p>` : ''}
     <button type="button" class="primary wide" data-save="out"${n ? '' : ' disabled'}>Simpan berangkat (${n})</button>
+    ${n ? '<button type="button" class="ghost small" data-restart>Mulai dari awal</button>' : ''}
     <p class="muted small center">Tanggal dan jam dicatat otomatis. Kembali sebelum 21:30.</p>
   </div>`;
 }
@@ -223,6 +271,7 @@ function count(g) {
     <p class="muted">Sentuh semua barang yang <b>benar-benar ada di depan Anda</b>, lalu Lanjut untuk kondisinya. Anda tidak melihat barang mana yang seharusnya keluar.</p>
     ${touchGrids(g, c, g.items)}
     <button type="button" class="primary wide" data-next${total ? '' : ' disabled'}>Lanjut (${total})</button>
+    ${total ? '<button type="button" class="ghost small" data-restart>Mulai dari awal</button>' : ''}
   </div>`;
 }
 
@@ -242,6 +291,7 @@ function ret(g) {
     <p class="gahint">Bukan untuk inventaris. Menghitung semua barang? <button type="button" class="ghost small" data-go="count">Cek malam</button></p>
     ${touchGrids(g, c, g.items)}
     <button type="button" class="primary wide" data-next${total ? '' : ' disabled'}>Lanjut (${total})</button>
+    ${total ? '<button type="button" class="ghost small" data-restart>Mulai dari awal</button>' : ''}
   </div>`;
 }
 
@@ -267,6 +317,7 @@ function diffs(g) {
 // ---------- shell ----------
 let rendering = null, again = false;
 function render() {
+  saveDraft(); // every change of the picks is redrawn: saved at that same moment (before any wait)
   if (rendering) { again = true; return rendering; }
   rendering = (async () => { do { again = false; await renderNow(); } while (again); })().catch(e => console.error(e)).finally(() => { rendering = null; });
   return rendering;
@@ -296,7 +347,11 @@ document.addEventListener('click', async e => {
     helpMenu(b, { title: 'Panduan', text: 'Penjelasan setiap layar, langkah demi langkah. Selama panduan, tidak ada yang tersimpan.', startLabel: 'Mulai panduan ›', closeLabel: 'Tutup', start: runTour });
     return;
   }
-  if (ds.go) { ui.screen = ds.go; ui.sel = new Set(); ui.sure = false; ui.count = null; render(); scrollTo(0, 0); return; }
+  if (ds.go) {
+    if (ds.go === 'home' && history.state && history.state.gear) { history.back(); return; } // popstate draws the menu
+    goScreen(ds.go); render(); scrollTo(0, 0); return;
+  }
+  if (ds.restart !== undefined) { ui.count = null; ui.sel = new Set(); ui.sure = false; dropDraft(ui.screen); ui.notice = ''; render(); return; }
   if (ds.notify !== undefined) { try { await Notification.requestPermission(); } catch { /* unsupported */ } render(); return; }
   if (ds.logout !== undefined) {
     b.disabled = true;
@@ -329,7 +384,7 @@ document.addEventListener('click', async e => {
     c.review = true; ui.sure = false; render(); scrollTo(0, 0); return;
   }
   if (ds.bulkok !== undefined) { ui.count.bulkAsk = false; ui.count.bulkOk = true; ui.count.review = true; render(); return; }
-  if (ds.tocount !== undefined) { const c = ui.count; c.bulkAsk = false; c.review = false; ui.screen = 'count'; ui.sure = false; render(); scrollTo(0, 0); return; }
+  if (ds.tocount !== undefined) { const c = ui.count; c.bulkAsk = false; c.review = false; dropDraft('ret'); ui.screen = 'count'; ui.sure = false; saveDraft(); render(); scrollTo(0, 0); return; }
   if (ds.edit !== undefined) { ui.count.review = false; ui.sure = false; render(); return; }
   if (ds.problem) { (ui.count.open = ui.count.open || {})[ds.problem] = true; render(); return; }
   if (ds.rc) { const [id, k] = ds.rc.split('|'); ui.count.items[id] = k; ui.sure = false; render(); return; }
@@ -339,7 +394,7 @@ document.addEventListener('click', async e => {
     window.open(waLink(g.managerWa, `${ds.what} ${dayText()}: ${ds.wa} — ${COND[c.items[ds.wa]] || ''}.${note ? ' ' + note + '.' : ''} Foto terlampir.`), '_blank', 'noopener');
     return;
   }
-  if (ds.recount !== undefined) { ui.count = newPick(); render(); return; }
+  if (ds.recount !== undefined) { ui.count = newPick(); dropDraft('count'); render(); return; }
   if (ds.save === 'back' || ds.save === 'ret' || ds.save === 'count') {
     const miss = checkNotes(ui.count);
     if (miss) { const er = document.querySelector('[data-err]'); if (er) er.textContent = `${miss}: tulis komentar untuk “Lainnya”.`; document.querySelector(`[data-note="${miss}"]`)?.focus(); return; }
@@ -355,7 +410,7 @@ document.addEventListener('click', async e => {
   if (ds.save === 'out') {
     b.disabled = true;
     await enqueue('sunset_out', { trip: newId('T'), items: [...ui.sel] });
-    ui.notice = `Berangkat: ${ui.sel.size} masker.`; ui.sel = new Set(); ui.screen = 'home'; render(); return;
+    ui.notice = `Berangkat: ${ui.sel.size} masker.`; ui.sel = new Set(); dropDraft('sunset'); ui.screen = 'home'; render(); return;
   }
   if (ds.save === 'back') {
     const open = g.trips.find(t => !t.closed);
@@ -369,21 +424,21 @@ document.addEventListener('click', async e => {
     await enqueue('sunset_back', { trip: open.trip, items, conditions, notes });
     const broken = Object.keys(conditions).length;
     ui.notice = (missing.length ? `Disimpan. ${missing.length} belum kembali → selisih untuk resepsionis.` : 'Semua masker kembali.') + (broken ? ` ${broken} bermasalah → resepsionis memutuskan.` : '');
-    ui.count = null; ui.sure = false; ui.screen = 'home'; render(); return;
+    ui.count = null; ui.sure = false; dropDraft('sunset'); ui.screen = 'home'; render(); return;
   }
   if (ds.save === 'ret') {
     b.disabled = true;
     const items = itemsOf(ui.count);
     await enqueue('gear_return', { gid: newId('G'), items });
     ui.notice = `Pengembalian disimpan: ${items.map(x => x.item).join(', ')}.`;
-    ui.count = null; ui.screen = 'home'; render(); return;
+    ui.count = null; dropDraft('ret'); ui.screen = 'home'; render(); return;
   }
   if (ds.save === 'count') {
     if (!ui.sure) { ui.sure = true; render(); return; }
     b.disabled = true;
     const items = itemsOf(ui.count);
     await enqueue('gear_count', { cid: newId('K'), items });
-    ui.count = null; ui.sure = false;
+    ui.count = null; ui.sure = false; dropDraft('count');
     ui.notice = 'Cek terkirim. Hasilnya muncul di sini setelah sampai di sheet.'; render(); return;
   }
 });
@@ -391,7 +446,7 @@ document.addEventListener('click', async e => {
 // A comment is kept as it is typed (no redraw, the keyboard stays open).
 document.addEventListener('input', e => {
   const t = e.target;
-  if (t.dataset && t.dataset.note !== undefined && ui.count) ui.count.notes[t.dataset.note] = t.value;
+  if (t.dataset && t.dataset.note !== undefined && ui.count) { ui.count.notes[t.dataset.note] = t.value; saveDraft(); }
 });
 
 // ---------- guided tour (the "?" in the header) ----------
@@ -478,6 +533,12 @@ function runTour() {
   });
 }
 
+// After a reload or a new login: back on the screen that was being filled, with its picks.
+function resumeDraft() {
+  const all = loadDrafts();
+  if (DRAFT_SCREENS.includes(all.screen) && all[all.screen]) goScreen(all.screen);
+}
+
 async function boot() {
   onStatus(renderStrip);
   onStatus((s, evt) => {
@@ -485,6 +546,7 @@ async function boot() {
     if (evt && (evt.pulled || evt.pushed) && !busy()) render();
   });
   ui.user = await currentUser();
+  if (ui.user) resumeDraft();
   await cleanupTokens().catch(() => {}); // a session nobody needs any more (nothing waiting) is revoked
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
   await render();
