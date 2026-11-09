@@ -346,6 +346,14 @@ var UIAPI = (function () {
     props.setProperty('UIS_' + token, JSON.stringify({ u: user.username, exp: Date.now() + SESSION_DAYS * 86400000, dev: deviceId, reg: registered }));
     return { token: token, user: publicUser_(user), sessionDays: SESSION_DAYS, registered: registered, via: 'pos' };
   }
+  // One staff list (owner 09/11): the POS (its session, account bar-pos) reads who works here; no passwords leave.
+  function pos_staff(body) {
+    var caller = auth_(session_(body.token));
+    if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account can read the staff');
+    return { staff: readUsers_().filter(function (u) { return u.username !== caller.username; }).map(function (u) {
+      return { username: u.username, name: u.name, role: u.role, active: u.active };
+    }) };
+  }
   function publicUser_(u) { return { username: u.username, name: u.name, role: u.role, author: u.author || u.username }; }
 
   // ---------- pull ----------
@@ -2580,7 +2588,7 @@ var UIAPI = (function () {
     soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;
