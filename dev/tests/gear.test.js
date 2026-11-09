@@ -385,3 +385,12 @@ test('Seb 06/11: reception staff accounts work in the gear app (blind there); tw
   assert.strictEqual(same.error, 'bad_payload', 'the same person cannot confirm both sides');
   assert.strictEqual(push(env, ayu, op('gear_count', { cid: id('K'), items: [] })).results[0].error, 'forbidden', 'without the gear app flag');
 });
+
+test('Seb 09/11: an inventory done in "Pengembalian" does not pile up the same difference for each number', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  const all = gearOf(env, made).items.map(i => ({ item: i.id, condition: 'OK' }));
+  for (let k = 0; k < 3; k++) assert.strictEqual(push(env, made, op('gear_return', { gid: id('G'), items: all })).results[0].status, 'applied');
+  const nout = gearOf(env, ayu).diffs.filter(d => d.kind === 'returned_not_out');
+  assert.strictEqual(nout.length, all.length, 'one per number, not one per try');
+});

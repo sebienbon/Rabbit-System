@@ -228,11 +228,17 @@ function count(g) {
 function ret(g) {
   const c = ui.count = ui.count || newPick();
   const total = Object.keys(c.items).length;
+  if (c.bulkAsk) return `${bar('Pengembalian')}<div class="gabody">
+    <h1>${total} barang?</h1>
+    <div class="phwarn">Pengembalian hanya untuk barang yang <b>dikembalikan tamu</b> kepada Anda. Kalau Anda sedang <b>menghitung semua barang</b> (inventaris), pakai <b>Cek malam</b>.</div>
+    <button type="button" class="primary wide" data-tocount>Ini inventaris → Cek malam</button>
+    <button type="button" class="ghost wide" data-bulkok>Tidak, semua ini dikembalikan tamu</button></div>`;
   if (c.review) return `${bar('Pengembalian')}<div class="gabody"><h1>Pengembalian · kondisi</h1>${reviewList(g, c, 'Pengembalian')}
     <button type="button" class="primary wide" data-save="ret">Simpan pengembalian (${total})</button>
     <p class="muted small center">Biaya keterlambatan atau kerusakan diputuskan oleh resepsionis.</p></div>`;
   return `${bar('Pengembalian')}<div class="gabody">
     <p class="muted">Tamu mengembalikan masker atau sepeda kepada Anda? Sentuh nomornya, lalu Lanjut untuk kondisinya.</p>
+    <p class="gahint">Bukan untuk inventaris. Menghitung semua barang? <button type="button" class="ghost small" data-go="count">Cek malam</button></p>
     ${touchGrids(g, c, g.items)}
     <button type="button" class="primary wide" data-next${total ? '' : ' disabled'}>Lanjut (${total})</button>
   </div>`;
@@ -311,7 +317,14 @@ document.addEventListener('click', async e => {
     } else if (ui.sel.has(id)) ui.sel.delete(id); else ui.sel.add(id);
     render(); return;
   }
-  if (ds.next !== undefined) { const c = ui.count = ui.count || newPick(); c.review = true; ui.sure = false; render(); scrollTo(0, 0); return; }
+  if (ds.next !== undefined) {
+    const c = ui.count = ui.count || newPick();
+    // Many numbers at once in "Pengembalian" is almost always an inventory done in the wrong place (09/11).
+    if (ui.screen === 'ret' && Object.keys(c.items).length >= 5 && !c.bulkOk) { c.bulkAsk = true; render(); scrollTo(0, 0); return; }
+    c.review = true; ui.sure = false; render(); scrollTo(0, 0); return;
+  }
+  if (ds.bulkok !== undefined) { ui.count.bulkAsk = false; ui.count.bulkOk = true; ui.count.review = true; render(); return; }
+  if (ds.tocount !== undefined) { const c = ui.count; c.bulkAsk = false; c.review = false; ui.screen = 'count'; ui.sure = false; render(); scrollTo(0, 0); return; }
   if (ds.edit !== undefined) { ui.count.review = false; ui.sure = false; render(); return; }
   if (ds.problem) { (ui.count.open = ui.count.open || {})[ds.problem] = true; render(); return; }
   if (ds.rc) { const [id, k] = ds.rc.split('|'); ui.count.items[id] = k; ui.sure = false; render(); return; }

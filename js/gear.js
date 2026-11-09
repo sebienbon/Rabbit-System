@@ -112,7 +112,10 @@ export async function renderGear(root, d) {
   }).join('');
 
   root.innerHTML = `<div class="gearpage">
-    ${g.diffs.length ? `<section class="card gcard bad"><h2>Differences to solve together</h2><ul class="gl">${g.diffs.map(diffRow).join('')}</ul>
+    ${g.diffs.length ? `<section class="card gcard bad"><h2>Differences to solve together</h2>${(() => {
+      const nout = g.diffs.filter(x => x.kind === 'returned_not_out' && !x.reception && !x.pending);
+      return nout.length >= 2 && allowed ? `<p class="small">${nout.length} numbers handed to the gear staff but not recorded as out (often an inventory done in “Pengembalian” instead of the evening check). <button type="button" class="ghost small" data-dfnoutall>Checked · all ${nout.length}</button></p>` : '';
+    })()}<ul class="gl">${g.diffs.map(diffRow).join('')}</ul>
       <p class="muted small">Closed when the reception and the gear staff both confirm.</p></section>` : ''}
     <div class="ggrid">
       <div class="col">
@@ -233,6 +236,12 @@ export async function renderGear(root, d) {
     }
     if (ds.dflate) { b.disabled = true; await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dflate, action: 'returned', ext: { ts: await nextTs() } }); ui.notice = 'Extension charged (Unpaid).'; d.render(); return; }
     if (ds.dfwaive) { b.disabled = true; await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dfwaive, action: 'waived' }); ui.notice = 'Extension waived.'; d.render(); return; }
+    if (ds.dfnoutall !== undefined) {
+      b.disabled = true;
+      const nout = g.diffs.filter(x => x.kind === 'returned_not_out' && !x.reception && !x.pending);
+      for (const x of nout) await enqueue('gear_confirm', { cfid: newId('F'), diff: x.id, action: 'found' });
+      ui.notice = `Checked: ${nout.length} numbers.`; d.render(); return;
+    }
     if (ds.dffound) { b.disabled = true; await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dffound, action: 'found' }); ui.notice = 'Confirmed: found.'; d.render(); return; }
     if (ds.dflost) { ui.dfLost = ds.dflost; d.render(); return; }
     if (ds.dfcancel !== undefined) { ui.dfLost = null; d.render(); return; }

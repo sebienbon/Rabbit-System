@@ -1428,8 +1428,10 @@ var UIAPI = (function () {
       var guest = it.last ? it.last.guest : '';
       if (it.where !== 'out' && it.where !== 'sunset') {
         // Not recorded as out: accepted without a word (blind), but the reception checks it (gone without a sale?).
-        rows.push({ at: at, id: id + '-nout', type: 'diff', item: it.id, ref: gid, by: me.username, d: { kind: 'returned_not_out', last: it.last } });
-        rows.push({ at: at, id: id + '-nout-g', type: 'confirm', item: it.id, ref: id + '-nout', by: me.username, d: { side: 'gear', action: 'returned' } });
+        // Once per number while unchecked (09/11: an inventory done 4 times in "Pengembalian" made 60 of them).
+        var already = st.diffs.some(function (d) { return d.item === it.id && d.kind === 'returned_not_out'; });
+        if (!already) rows.push({ at: at, id: id + '-nout', type: 'diff', item: it.id, ref: gid, by: me.username, d: { kind: 'returned_not_out', last: it.last } });
+        if (!already) rows.push({ at: at, id: id + '-nout-g', type: 'confirm', item: it.id, ref: id + '-nout', by: me.username, d: { side: 'gear', action: 'returned' } });
         if (it.where === 'lost') rows.push({ at: at, id: id, type: 'return', item: it.id, ref: guest, by: me.username, d: { condition: cond, via: 'gear staff' } }); // found again
       }
       if (it.where === 'out' || it.where === 'sunset') {
