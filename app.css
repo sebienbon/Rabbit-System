@@ -687,3 +687,30 @@ h3.sub .help-pop { left: -4px; }
 /* Partners: one bill for several partners */
 .partners h3.pgroup { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
 .partners p.small { font-size: .85rem; margin: -4px 0 6px; }
+
+/* ---------- Guided tour ("?" in the header) ---------- */
+.who .helpq { width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(255,255,255,.7); background: rgba(255,255,255,.16); color: #fff; font: 800 1rem var(--sans); cursor: pointer; line-height: 1; padding: 0; flex: none; }
+.who .helpq:hover { background: rgba(255,255,255,.3); }
+.who .helpq:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.tour { position: fixed; inset: 0; z-index: 1000; }
+.tour-block { position: fixed; inset: 0; }
+.tour-spot { position: fixed; border-radius: 14px; box-shadow: 0 0 0 9999px rgba(30,24,60,.55); outline: 3px solid var(--orange); transition: all .2s ease; pointer-events: none; }
+.tour:has(.tour-spot[hidden]) .tour-block { background: rgba(30,24,60,.55); }
+.tour-card { position: fixed; z-index: 1001; width: max-content; background: var(--paper); color: var(--ink); border-radius: var(--radius-sm); box-shadow: var(--shadow-up), 0 0 0 1px var(--line); padding: 14px 16px 12px; font-family: var(--sans); transition: top .2s ease, left .2s ease; }
+.tour-card.busy { opacity: .6; }
+.tour-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.tour-n { font-size: .8rem; font-weight: 800; color: var(--accent); letter-spacing: .02em; }
+.tour-x { border: 0; background: none; font-size: 1.5rem; line-height: 1; color: var(--ink-soft); cursor: pointer; padding: 0 2px; }
+.tour-title { display: block; font-family: var(--display); font-size: 1.15rem; margin: 2px 0 4px; }
+.tour-text { margin: 0 0 12px; line-height: 1.45; }
+.tour-nav button { white-space: nowrap; }
+.tour-nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.tour-nav [data-tour="back"][hidden] { visibility: hidden; display: inline-block; }
+.tour-nav .primary { min-width: 120px; }
+.tour-arrow { position: absolute; width: 16px; height: 16px; background: var(--paper); transform: rotate(45deg); box-shadow: -1px -1px 0 var(--line); }
+.tour-arrow.up { top: -8px; }
+.tour-arrow.down { bottom: -8px; box-shadow: 1px 1px 0 var(--line); }
+.tour-arrow[hidden] { display: none; }
+.tour-menu { z-index: 1002; }
+.tour-menu .tour-text { margin-bottom: 12px; }
+@media (prefers-reduced-motion: reduce) { .tour-spot, .tour-card { transition: none; } }

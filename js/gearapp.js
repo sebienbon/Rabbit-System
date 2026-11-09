@@ -8,6 +8,7 @@ import { db } from './db.js';
 const enqueue = (type, payload) => enqueueOp(type, { ...payload, app: 'gear' });
 import { CONFIG } from './config.js';
 import { gearView, checkDue, notifyOnce, fmtWhen } from './gearcore.js';
+import { startTour, helpMenu, tourRunning } from './tour.js';
 
 const $ = s => document.querySelector(s);
 const main = () => $('#main');
@@ -245,7 +246,7 @@ function ret(g) {
 }
 
 function diffs(g) {
-  const list = g.diffs;
+  const list = ui.tourDiffs || g.diffs;
   return `${bar('Selisih')}<div class="gabody">
     ${list.length ? list.map(d => {
       const later = ui.later[d.id];
@@ -272,7 +273,7 @@ function render() {
 }
 async function renderNow() {
   if (!ui.user) return renderLogin();
-  $('#who').innerHTML = `<span>${esc(ui.user.name)}</span>`;
+  $('#who').innerHTML = `<span>${esc(ui.user.name)}</span><button type="button" class="helpq" data-help aria-label="Panduan" title="Panduan">?</button>`;
   const g = await gearView('gear');
   if (!g) { main().innerHTML = '<section class="card"><p class="muted">Daftar barang (sheet SG) datang saat terhubung ke internet.</p></section>'; return; }
   if (checkDue(g)) notifyOnce('gearcheck', 'Cek malam', 'Masker dan sepeda belum dicek hari ini.', './gear.html');
@@ -286,11 +287,15 @@ async function renderNow() {
   ui.notice = '';
   ui.g = g;
 }
-const busy = () => ui.sel.size || (ui.count && Object.keys(ui.count.items).length);
+const busy = () => tourRunning() || ui.sel.size || (ui.count && Object.keys(ui.count.items).length);
 
 document.addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b || !ui.user) return;
   const ds = b.dataset, g = ui.g;
+  if (ds.help !== undefined) {
+    helpMenu(b, { title: 'Panduan', text: 'Penjelasan setiap layar, langkah demi langkah. Selama panduan, tidak ada yang tersimpan.', startLabel: 'Mulai panduan ›', closeLabel: 'Tutup', start: runTour });
+    return;
+  }
   if (ds.go) { ui.screen = ds.go; ui.sel = new Set(); ui.sure = false; ui.count = null; render(); scrollTo(0, 0); return; }
   if (ds.notify !== undefined) { try { await Notification.requestPermission(); } catch { /* unsupported */ } render(); return; }
   if (ds.logout !== undefined) {
@@ -388,6 +393,90 @@ document.addEventListener('input', e => {
   const t = e.target;
   if (t.dataset && t.dataset.note !== undefined && ui.count) ui.count.notes[t.dataset.note] = t.value;
 });
+
+// ---------- guided tour (the "?" in the header) ----------
+// Each step shows a screen with example choices (nothing is sent: the tour blocks every tap),
+// then points at one thing. Texts are for staff who are new to the app.
+function runTour() {
+  const g0 = ui.g || { items: [], trips: [] };
+  const masks = g0.items.filter(i => i.kind === 'mask').map(i => i.id), bikes = g0.items.filter(i => i.kind === 'bike').map(i => i.id);
+  const m = k => masks[k] || 'SG00' + (k + 1);
+  const screen = async (name, setup) => {
+    ui.screen = name; ui.sel = new Set(); ui.sure = false; ui.count = null; ui.tourDiffs = null; ui.notice = '';
+    if (setup) setup();
+    await render(); scrollTo(0, 0);
+  };
+  const pick = (ids, review) => { const c = newPick(); ids.forEach(id => { c.items[id] = 'OK'; }); c.review = !!review; ui.count = c; return c; };
+  const reviewDemo = () => {
+    const c = pick([m(0), m(1), m(2), ...(bikes[0] ? [bikes[0]] : [])], true);
+    c.items[m(1)] = 'Snorkel missing'; c.open = { [m(1)]: true }; c.notes[m(1)] = 'contoh: snorkel tidak ada';
+  };
+  const openTrip = (ui.g?.trips || []).some(t => !t.closed);
+  const steps = [
+    { show: () => screen('home'), title: 'Selamat datang 👋',
+      text: 'Panduan ini menunjukkan semua layar aplikasi gear.\nTekan *Lanjut ›* untuk lanjut.\nSelama panduan, tidak ada yang tersimpan: Anda bisa melihat dengan tenang.' },
+    { show: () => screen('home'), el: '#sync', title: 'Koneksi',
+      text: 'Status internet. Kalau internet mati, aplikasi tetap bisa dipakai: semua tersimpan di HP dan dikirim otomatis nanti.' },
+    { show: () => screen('home'), el: '[data-go="sunset"]', title: 'Sunset Boat',
+      text: 'Untuk masker yang *naik perahu*: catat waktu berangkat, lalu catat yang kembali.' },
+    { show: () => screen('home'), el: '[data-go="ret"]', title: 'Pengembalian',
+      text: 'HANYA kalau *tamu mengembalikan* masker atau sepeda langsung kepada Anda.\n⚠️ Bukan untuk inventaris!' },
+    { show: () => screen('home'), el: '[data-go="count"]', title: 'Cek malam = inventaris',
+      text: 'Setiap malam sekitar jam *20:00*, hitung semua masker dan sepeda di sini. *Cukup 1 kali* per malam.' },
+    { show: () => screen('home'), el: '[data-go="diffs"]', title: 'Selisih',
+      text: 'Barang yang tidak cocok antara hitungan Anda dan catatan resepsionis. Diselesaikan bersama resepsionis.' },
+    { show: () => screen('home'), el: '.gahome .gawa', title: 'WhatsApp manajer',
+      text: 'Ada masalah atau tidak yakin? Hubungi manajer langsung dari sini.' },
+
+    ...(openTrip ? [
+      { show: () => screen('sunset'), el: '.gabody > .muted', title: 'Sunset Boat · kembali',
+        text: 'Perahu sedang di laut. Saat kembali, sentuh setiap masker yang sudah dikembalikan.' },
+      { show: () => screen('sunset', () => pick([m(0), m(1)])), el: '.gagrid', title: 'Sentuh nomornya',
+        text: 'Nomor yang disentuh jadi berwarna. Sentuh lagi untuk membatalkan.' },
+      { show: () => screen('sunset', () => pick([m(0), m(1)])), el: '[data-next]', title: 'Lanjut',
+        text: 'Lalu *Lanjut*: Anda cek kondisi setiap masker, lalu simpan. Masker yang tidak kembali menjadi selisih untuk resepsionis.' },
+    ] : [
+      { show: () => screen('sunset'), el: '.gabody > .muted', title: 'Sunset Boat · berangkat',
+        text: 'Jumlah tamu Sunset Boat hari ini, dari penjualan resepsionis.\nSOP: bawa *2 masker tambahan*.' },
+      { show: () => screen('sunset', () => { ui.sel = new Set([m(0), m(1)]); }), el: '.gagrid', title: 'Sentuh masker yang naik perahu',
+        text: 'Sentuh nomor setiap masker yang dibawa. Nomor yang dipilih jadi berwarna. Sentuh lagi untuk membatalkan.' },
+      { show: () => screen('sunset', () => { ui.sel = new Set([m(0), m(1)]); }), el: '[data-save="out"]', title: 'Simpan berangkat',
+        text: 'Tanggal dan jam dicatat otomatis. Saat perahu kembali (sebelum 21:30), buka lagi *Sunset Boat* dan sentuh masker yang kembali.' },
+    ]),
+
+    { show: () => screen('count'), el: '.gabody > .muted', title: 'Cek malam',
+      text: 'Sentuh semua barang yang *benar-benar ada di depan Anda*.\nAnda tidak melihat barang mana yang sedang disewa: itu disengaja. Sistem yang membandingkan.' },
+    { show: () => screen('count', () => pick([m(0), m(1), m(2)])), el: '.gagrid.six', title: 'Masker',
+      text: 'Sentuh = ada di sini. Sentuh lagi = batal.\nJangan sentuh nomor yang tidak ada.' },
+    { show: () => screen('count', () => pick([m(0), m(1), m(2), ...(bikes[0] ? [bikes[0]] : [])])), el: '.gagrid.three', title: 'Sepeda',
+      text: 'Sama untuk sepeda: sentuh yang ada di sini.' },
+    { show: () => screen('count', () => pick([m(0), m(1), m(2)])), el: '[data-next]', title: 'Lanjut',
+      text: 'Setelah semua yang ada disentuh, tekan *Lanjut* untuk kondisinya.' },
+    { show: () => screen('count', reviewDemo), el: '.garowmin', title: 'Kondisi',
+      text: 'Setiap barang *Baik*. Kalau rusak atau ada bagian yang hilang, tekan *Ada masalah?* di nomornya.' },
+    { show: () => screen('count', reviewDemo), el: '.garow1 .gaconds', title: 'Pilih masalahnya',
+      text: 'Rusak, Ring hilang, Snorkel hilang, Masker hilang, atau Lainnya.' },
+    { show: () => screen('count', reviewDemo), el: ['.garow1 .ganote', '.garow1'], title: 'Komentar dan foto',
+      text: 'Tulis apa yang terjadi (*wajib* untuk Lainnya). Tombol WhatsApp mengirim foto ke manajer. Resepsionis yang memutuskan biaya.' },
+    { show: () => screen('count', reviewDemo), el: '[data-save="count"]', title: 'Kirim hasil cek',
+      text: 'Sentuh *2 kali* untuk mengirim. Setelah dikirim, hitungan tidak bisa diubah.\nSistem membandingkan dengan catatan resepsionis dan membuat *Selisih* jika ada yang tidak cocok.' },
+
+    { show: () => screen('ret'), el: '.gahint', title: 'Pengembalian',
+      text: 'Ingat: hanya untuk barang yang *dikembalikan tamu* kepada Anda. Untuk menghitung semua barang → *Cek malam*.' },
+    { show: () => screen('ret', () => pick([m(3)])), el: '.gagrid.six', title: 'Sentuh yang dikembalikan',
+      text: 'Sentuh nomor yang dikembalikan tamu, *Lanjut*, cek kondisinya, lalu simpan. Keterlambatan atau kerusakan diputuskan oleh resepsionis.' },
+
+    { show: () => screen('diffs', () => { ui.tourDiffs = [{ id: 'tour-demo', item: m(4), kind: 'missing', last: null }]; }), el: '.gadiff', title: 'Selisih (contoh)',
+      text: 'Untuk setiap selisih: cari barangnya.\nKetemu → *Ketemu*. Belum ketemu → *Belum selesai* (tetap terbuka).\nSelisih tertutup jika *Anda dan resepsionis* sama-sama konfirmasi.' },
+
+    { show: () => screen('home'), el: '[data-help]', title: 'Selesai 🎉',
+      text: 'Tekan *?* kapan saja untuk melihat panduan ini lagi.\nRingkas:\n• Tamu mengembalikan → *Pengembalian*\n• Inventaris malam → *Cek malam* (1 kali)\n• Perahu → *Sunset Boat*' },
+  ];
+  startTour(steps, {
+    labels: { next: 'Lanjut ›', back: '‹ Kembali', done: 'Selesai', close: 'Tutup', of: 'dari' },
+    onEnd: () => { ui.screen = 'home'; ui.sel = new Set(); ui.count = null; ui.sure = false; ui.tourDiffs = null; render(); scrollTo(0, 0); },
+  });
+}
 
 async function boot() {
   onStatus(renderStrip);
