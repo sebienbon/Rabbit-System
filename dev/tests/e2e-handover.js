@@ -116,8 +116,11 @@ const step = m => console.log('  ✓ ' + m);
     // ---- an older queue with two people (from before the rule): each sent with their own session ----
     await desk.evaluate(async () => {
       const { db } = await import('./js/db.js');
-      await db.put('outbox', { id: 'Dx-legacy-dewa', type: 'sale', at: new Date().toISOString(), by: 'dewa', author: 'r2@x',
-        payload: { saleId: 'Lg1', payment: 'Cash', lines: [{ ts: '20261103120000123', guest: 'Bob Sample', category: 'Service', object: 'Towel', qty: 1, unit: 50000 }] } });
+      // Line id built from the operation time (the server refuses an id that does not match it).
+      const at = new Date(), p2 = n => String(n).padStart(2, '0'), l = new Date(at.getTime() + 8 * 3600e3);
+      const ts = `${l.getUTCFullYear()}${p2(l.getUTCMonth() + 1)}${p2(l.getUTCDate())}${p2(l.getUTCHours())}${p2(l.getUTCMinutes())}${p2(l.getUTCSeconds())}${String(l.getUTCMilliseconds()).padStart(3, '0')}`;
+      await db.put('outbox', { id: 'Dx-legacy-dewa', type: 'sale', at: at.toISOString(), by: 'dewa', author: 'r2@x',
+        payload: { saleId: 'Lg1', payment: 'Cash', lines: [{ ts, guest: 'Bob Sample', category: 'Service', object: 'Towel', qty: 1, unit: 50000 }] } });
     });
     assert.strictEqual(await tryLogin(desk, 'dewa', 'dewa123'), 'ok', 'Dewa has operations waiting too: he may log in');
     const dewaToken = await kv(desk, 'deviceToken');
