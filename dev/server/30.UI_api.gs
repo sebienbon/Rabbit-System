@@ -290,6 +290,31 @@ var UIAPI = (function () {
     var asStaff = {}; Object.keys(u).forEach(function (k) { asStaff[k] = u[k]; }); asStaff.role = 'staff';
     return { user: asStaff, via: 'offline-login on device' };
   }
+  // ---------- one login for the reception and the bar POS (owner 09/11) ----------
+  // The reception app asks for a pass (its user's session); it opens the POS with it; the POS (its own session, account
+  // bar-pos, manager) asks who it is. A pass works once, within 2 minutes; nothing else leaves the sheet.
+  var POS_PASS_MS = 120000;
+  function pos_pass(body) {
+    var me = auth_(session_(body.token));
+    if (me.role === 'gear') throw apiError_('forbidden', 'Gear accounts do not use the bar POS');
+    var props = PropertiesService.getScriptProperties(), all = props.getProperties(), now = Date.now();
+    Object.keys(all).forEach(function (k) { if (k.indexOf('UIPOS_') === 0) { try { if (JSON.parse(all[k]).exp < now) props.deleteProperty(k); } catch (e) { props.deleteProperty(k); } } });
+    var code = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+    props.setProperty('UIPOS_' + code, JSON.stringify({ u: me.username, exp: now + POS_PASS_MS }));
+    return { pass: code, validMs: POS_PASS_MS };
+  }
+  function pos_verify(body) {
+    var caller = auth_(session_(body.token));
+    if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account can check a pass');
+    var key = 'UIPOS_' + String(body.pass || '').replace(/[^a-z0-9]/gi, '').slice(0, 80), props = PropertiesService.getScriptProperties();
+    var raw = props.getProperty(key);
+    if (raw) props.deleteProperty(key); // once
+    var p = raw ? JSON.parse(raw) : null;
+    if (!p || p.exp < Date.now()) throw apiError_('bad_pass', 'This link expired: open the POS again from the reception');
+    var u = findUser_(p.u);
+    if (!u || !u.active) throw apiError_('bad_pass', 'User disabled');
+    return { user: publicUser_(u) };
+  }
   function publicUser_(u) { return { username: u.username, name: u.name, role: u.role, author: u.author || u.username }; }
 
   // ---------- pull ----------
@@ -2524,7 +2549,7 @@ var UIAPI = (function () {
     soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;

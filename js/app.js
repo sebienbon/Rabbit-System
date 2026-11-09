@@ -1,6 +1,7 @@
 import { db } from './db.js';
 import { CONFIG } from './config.js';
-import { login, logout, currentUser, isRegistered, outboxOwners, cleanupTokens } from './auth.js';
+import { login, logout, currentUser, isRegistered, outboxOwners, cleanupTokens, tokenFor } from './auth.js';
+import { api } from './api.js';
 import { startSync, onStatus, pushNow, pullNow, refreshNow, dismissRejected, waitingCount, sheetReachable, warnOtherOutboxes, status as syncStatus, opDetails, copyText, CLOCK_WARN_MS } from './sync.js';
 import { currentShift, cashInBoxBeforeOpening, expectedCash, cashMovements, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
 import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy, partnerBusy, cardBusy } from './work.js';
@@ -392,7 +393,19 @@ async function renderNow() {
   $('#who').innerHTML = `<button type="button" class="refresh" id="refreshBtn" title="Refresh now: Beds24 and the sheet" aria-label="Refresh now">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
     <span>${esc(ui.user.name)}${ui.user.role !== 'staff' ? ` <em>${esc(ui.user.role)}</em>` : ''}</span>
+    ${CONFIG.POS_URL ? '<button class="ghost small" id="posBtn" title="Open the bar POS, logged in as you">Bar POS</button>' : ''}
     <button class="ghost small" id="logout">Log out</button>`;
+  // One login (owner 09/11): a one-time pass from the sheet, valid 2 minutes, opens the POS as this user.
+  if ($('#posBtn')) $('#posBtn').onclick = async () => {
+    const w = window.open('', 'rabbitpos'); // opened now, inside the click, so it is not blocked
+    try {
+      const { pass } = await api('pos_pass', { token: await tokenFor(ui.user.username) }, 15000);
+      if (w) w.location.href = `${CONFIG.POS_URL}/sso.html#${pass}`; else location.href = `${CONFIG.POS_URL}/sso.html#${pass}`;
+    } catch (e) {
+      if (w) w.location.href = CONFIG.POS_URL;
+      ui.notice = e.network ? 'No internet: the bar POS opens, log in there with your PIN.' : `Bar POS: ${e.message}`; render();
+    }
+  };
   $('#refreshBtn').onclick = async () => {
     const b = $('#refreshBtn');
     if (b.classList.contains('spin')) return;
