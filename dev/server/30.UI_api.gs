@@ -315,6 +315,37 @@ var UIAPI = (function () {
     if (!u || !u.active) throw apiError_('bad_pass', 'User disabled');
     return { user: publicUser_(u) };
   }
+  // The other way (owner 09/11): the POS (its session, account bar-pos) asks a pass for the Rabbit-System user linked to
+  // the person logged in on the POS (owner, manager or reception there); it opens this app in a new window with it, and
+  // the app logs in with the pass (pass_login) like with a password. A pass works once, within 2 minutes.
+  function rs_pass(body) {
+    var caller = auth_(session_(body.token));
+    if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account can ask a pass');
+    var u = findUser_(body.username);
+    if (!u || !u.active) throw apiError_('bad_user', 'Unknown or disabled Rabbit-System user ' + String(body.username || ''));
+    if (u.role === 'gear') throw apiError_('forbidden', 'Gear accounts use the gear app');
+    if (u.username === caller.username) throw apiError_('forbidden', 'The POS account itself does not use the reception');
+    var props = PropertiesService.getScriptProperties(), all = props.getProperties(), now = Date.now();
+    Object.keys(all).forEach(function (k) { if (k.indexOf('UIRS_') === 0) { try { if (JSON.parse(all[k]).exp < now) props.deleteProperty(k); } catch (e) { props.deleteProperty(k); } } });
+    var code = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+    props.setProperty('UIRS_' + code, JSON.stringify({ u: u.username, exp: now + POS_PASS_MS, by: caller.username }));
+    return { pass: code, validMs: POS_PASS_MS };
+  }
+  function pass_login(body) {
+    var key = 'UIRS_' + String(body.pass || '').replace(/[^a-z0-9]/gi, '').slice(0, 80), props = PropertiesService.getScriptProperties();
+    var raw = props.getProperty(key);
+    if (raw) props.deleteProperty(key); // once
+    var p = raw ? JSON.parse(raw) : null;
+    if (!p || p.exp < Date.now()) { Utilities.sleep(800); throw apiError_('bad_pass', 'This link expired: open the reception again from the POS, or log in with your password'); }
+    var user = findUser_(p.u);
+    if (!user || !user.active || user.role === 'gear') throw apiError_('bad_pass', 'User disabled');
+    var deviceId = String(body.deviceId || ''), devs = devices_();
+    var registered = !!(deviceId && body.deviceSecret && devs[deviceId] && devs[deviceId].secret === String(body.deviceSecret)); // never registers a device
+    purgeSessions_(props);
+    var token = Utilities.getUuid() + Utilities.getUuid().replace(/-/g, '');
+    props.setProperty('UIS_' + token, JSON.stringify({ u: user.username, exp: Date.now() + SESSION_DAYS * 86400000, dev: deviceId, reg: registered }));
+    return { token: token, user: publicUser_(user), sessionDays: SESSION_DAYS, registered: registered, via: 'pos' };
+  }
   function publicUser_(u) { return { username: u.username, name: u.name, role: u.role, author: u.author || u.username }; }
 
   // ---------- pull ----------
@@ -2549,7 +2580,7 @@ var UIAPI = (function () {
     soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;

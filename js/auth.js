@@ -124,6 +124,23 @@ export async function login(username, password, { register = false, gearApp = fa
   }
 }
 
+/**
+ * Opened by the POS ("Reception" button, owner 09/11) with a one-time pass in the address: logs in the person the
+ * POS asked for, like a password would (online only, never registers this computer).
+ */
+export async function loginWithPass(pass) {
+  const r = await api('pass_login', { pass, deviceId: await deviceId(), deviceSecret: (await db.get('deviceSecret')) || undefined });
+  try {
+    if (r.user.role === 'gear') throw new ApiError('wrong_app', 'Gear staff accounts use the gear app (gear.html), not the reception.');
+    await assertMayLogIn(r.user.username, false);
+  } catch (e) { revoke(r.token); throw e; }
+  const user = { ...r.user, mode: 'online' };
+  const writes = [...await takeToken(r.token, user.username, user.role), ['kv', 'put', user, 'currentUser']];
+  if (!r.registered) writes.push(['kv', 'delete', 'users']); // never keep hashes on an unregistered computer
+  await db.batch(writes);
+  return user;
+}
+
 // Password of the person logged in offline, kept in memory only, to get a session
 // from the sheet as soon as the connection is back (never written anywhere).
 let pendingOnline = null;

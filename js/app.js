@@ -1,6 +1,6 @@
 import { db } from './db.js';
 import { CONFIG } from './config.js';
-import { login, logout, currentUser, isRegistered, outboxOwners, cleanupTokens, tokenFor } from './auth.js';
+import { login, logout, currentUser, isRegistered, outboxOwners, cleanupTokens, tokenFor, loginWithPass } from './auth.js';
 import { api } from './api.js';
 import { startSync, onStatus, pushNow, pullNow, refreshNow, dismissRejected, waitingCount, sheetReachable, warnOtherOutboxes, status as syncStatus, opDetails, copyText, CLOCK_WARN_MS } from './sync.js';
 import { currentShift, cashInBoxBeforeOpening, expectedCash, cashMovements, openShift, closeShift, canClose, reconcile, money, parseMoney } from './shift.js';
@@ -397,12 +397,13 @@ async function renderNow() {
     <button class="ghost small" id="logout">Log out</button>`;
   // One login (owner 09/11): a one-time pass from the sheet, valid 2 minutes, opens the POS as this user.
   if ($('#posBtn')) $('#posBtn').onclick = async () => {
-    const w = window.open('', 'rabbitpos'); // opened now, inside the click, so it is not blocked
+    const w = window.open('', 'rabbitpos'); // its own window (tab), opened now inside the click so it is not blocked
+    if (!w) { ui.notice = 'The browser blocked the new window: allow pop-ups for this site, then press Bar POS again.'; render(); return; }
     try {
       const { pass } = await api('pos_pass', { token: await tokenFor(ui.user.username) }, 15000);
-      if (w) w.location.href = `${CONFIG.POS_URL}/sso.html#${pass}`; else location.href = `${CONFIG.POS_URL}/sso.html#${pass}`;
+      w.location.href = `${CONFIG.POS_URL}/sso.html#${pass}`;
     } catch (e) {
-      if (w) w.location.href = CONFIG.POS_URL;
+      w.location.href = CONFIG.POS_URL;
       ui.notice = e.network ? 'No internet: the bar POS opens, log in there with your PIN.' : `Bar POS: ${e.message}`; render();
     }
   };
@@ -470,6 +471,15 @@ async function boot() {
   }
   // A manager's session left from before (nobody logged in, nothing waiting): revoked now.
   await cleanupTokens().catch(() => {});
+  // Opened by the POS's "Reception" button (owner 09/11): a one-time pass logs that person in. Never replaces
+  // someone already logged in here (the reception is not logged out).
+  const pass = (location.hash.match(/^#pass=([a-z0-9]{20,80})$/i) || [])[1];
+  if (location.hash.startsWith('#pass=')) history.replaceState(null, '', location.pathname + location.search);
+  if (pass && ui.user) ui.notice = `${ui.user.name} is logged in on this computer: the POS link was not used.`;
+  else if (pass) {
+    try { ui.user = await loginWithPass(pass); ui.pickedUser = null; ui.notice = null; }
+    catch (e) { ui.notice = e.network ? 'No internet: log in with your password.' : e.message; }
+  }
   // Ask the browser to keep this computer's data even when the disk gets full.
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* not supported */ }
   await render();
