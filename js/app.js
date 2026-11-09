@@ -8,7 +8,9 @@ import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy, part
 import { barBusy } from './bar.js'; // TEMPORARY (bar cash-out)
 import { gearBusy, gearAlerts } from './gear.js';
 import { gearView, checkDue, notifyOnce } from './gearcore.js';
-const cartBusy = ui => saleBusy(ui) || expenseBusy(ui) || cashBusy(ui) || partnerBusy(ui) || cardBusy(ui) || barBusy(ui) || gearBusy(ui);
+import { helpMenu, tourRunning } from './tour.js';
+import { startDeskTour, deskScreenName } from './tourdesk.js';
+const cartBusy = ui => tourRunning() || saleBusy(ui) || expenseBusy(ui) || cashBusy(ui) || partnerBusy(ui) || cardBusy(ui) || barBusy(ui) || gearBusy(ui);
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -406,7 +408,9 @@ async function renderNow() {
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
     <span>${esc(ui.user.name)}${ui.user.role !== 'staff' ? ` <em>${esc(ui.user.role)}</em>` : ''}</span>
     ${posUrl() ? `<button class="ghost small" id="posBtn" title="Open the bar POS (${esc(posUrl())}), logged in as you">Bar POS</button>` : ''}
-    <button class="ghost small" id="logout">Log out</button>`;
+    <button class="ghost small" id="logout">Log out</button>
+    <button type="button" class="helpq" data-help aria-label="Guide for this screen" title="Guide for this screen · Panduan layar ini">?</button>`;
+  $('#who [data-help]').onclick = e => openGuide(e.currentTarget);
   // One login (owner 09/11): a one-time pass from the sheet, valid 2 minutes, opens the POS as this user.
   if ($('#posBtn')) $('#posBtn').onclick = async () => {
     const w = window.open('', 'rabbitpos'); // its own window (tab), opened now inside the click so it is not blocked
@@ -447,9 +451,32 @@ async function renderNow() {
   await renderShift();
 }
 
+// ---------- guides (the "?" in the header): one per screen, English or Bahasa Indonesia ----------
+async function guideKey() {
+  if (!(await currentShift())) return 'open';
+  const t = ui.tab;
+  if (t === 'sell') return ui.sellView === 'comm' ? 'sellcomm' : ui.sellView === 'acts' ? 'sellacts' : 'sell';
+  if (t === 'bills') return ui.billGuest ? 'bill' : 'bills';
+  if (t === 'close') return ui.closing ? 'closing' : 'close';
+  return t;
+}
+async function openGuide(anchor) {
+  const key = await guideKey();
+  helpMenu(anchor, {
+    title: `${deskScreenName(key, 'en')} · ${deskScreenName(key, 'id')}`,
+    text: 'Explains this screen step by step. Nothing is recorded during the guide. · Penjelasan layar ini, langkah demi langkah. Tidak ada yang tersimpan.',
+    closeLabel: 'Close',
+    actions: [
+      { label: 'Start the guide (English)', run: () => startDeskTour(key, 'en', () => afterSync()) },
+      { label: 'Mulai panduan (Bahasa Indonesia)', run: () => startDeskTour(key, 'id', () => afterSync()) },
+    ],
+  });
+}
+
 // Refresh the screen after a sync, unless the person is halfway through typing.
 async function afterSync() {
   await reconcile();
+  if (tourRunning()) return; // the guide points at what is on the screen: no redraw under it
   if (!ui.user || ui.closing || ui.editing || ui.refunding || ui.deleting) return;
   const active = document.activeElement;
   const typing = (active && active.matches && active.matches('main input, main select, main textarea')) ||

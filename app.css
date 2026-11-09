@@ -714,3 +714,4 @@ h3.sub .help-pop { left: -4px; }
 .tour-menu { z-index: 1002; }
 .tour-menu .tour-text { margin-bottom: 12px; }
 @media (prefers-reduced-motion: reduce) { .tour-spot, .tour-card { transition: none; } }
+.tour-menu .tour-act + .tour-act { margin-top: 8px; }

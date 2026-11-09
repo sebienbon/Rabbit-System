@@ -24,7 +24,7 @@ const shots = __dirname + '/shots/tour'; fs.mkdirSync(shots, { recursive: true }
     await phone.click('[data-help]');
     await phone.waitForSelector('.tour-menu');
     await phone.screenshot({ path: `${shots}/00-menu.png` });
-    await phone.click('[data-m="start"]');
+    await phone.click('[data-m="0"]');
     let n = 0, total = 0;
     for (;;) {
       await phone.waitForSelector('.tour-card:not(.busy) .tour-n');

@@ -30,7 +30,7 @@ export function startTour(steps, { labels = {}, onEnd = () => {} } = {}) {
 
   const find = sel => {
     for (const s of [].concat(sel || [])) {
-      const el = document.querySelector(s);
+      const el = typeof s === 'function' ? s() : document.querySelector(s);
       if (el && el.getClientRects().length) return el;
     }
     return null;
@@ -40,6 +40,8 @@ export function startTour(steps, { labels = {}, onEnd = () => {} } = {}) {
     const vw = innerWidth, vh = innerHeight, pad = 6, gap = 14;
     card.style.maxWidth = Math.min(340, vw - 24) + 'px';
     const cw = card.offsetWidth, ch = card.offsetHeight;
+    // The screen was redrawn under the tour (a sync): point at the new copy of the element.
+    if (target && !target.isConnected) target = find(steps[i].el);
     if (!target) {
       spot.hidden = true; arrow.hidden = true;
       card.style.left = Math.max(12, (vw - cw) / 2) + 'px';
@@ -109,17 +111,21 @@ export function startTour(steps, { labels = {}, onEnd = () => {} } = {}) {
 }
 
 export const endTour = () => current && current.end();
+// Is one of these on the screen now? (A guide leaves out the steps about what is not there.)
+export const onScreen = sel => [].concat(sel || []).some(x => { const el = typeof x === 'function' ? x() : document.querySelector(x); return !!(el && el.getClientRects().length); });
 
 // The "?" in the header: a small card under it with one button that starts the tour.
 let closeMenu = null;
-export function helpMenu(anchor, { title, text, start, startLabel, closeLabel = 'Close' }) {
+// actions: [{ label, run, primary }] (or start + startLabel for a single button).
+export function helpMenu(anchor, { title, text, start, startLabel, closeLabel = 'Close', actions }) {
+  actions = actions || [{ label: startLabel, run: start, primary: true }];
   if (closeMenu) { closeMenu(); return; } // the "?" again closes it
   const m = document.createElement('div');
   m.className = 'tour-menu tour-card';
   m.setAttribute('role', 'dialog');
   m.innerHTML = `<div class="tour-arrow up"></div><div class="tour-head"><b class="tour-title">${esc(title)}</b>
       <button type="button" class="tour-x" data-m="close" aria-label="${esc(closeLabel)}">×</button></div>
-    <p class="tour-text">${esc(text)}</p><button type="button" class="primary wide" data-m="start">${esc(startLabel)}</button>`;
+    <p class="tour-text">${esc(text)}</p>${actions.map((a, k) => `<button type="button" class="${a.primary === false ? 'ghost' : 'primary'} wide tour-act" data-m="${k}">${esc(a.label)}</button>`).join('')}`;
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect(), cw = Math.min(300, innerWidth - 24);
   m.style.maxWidth = cw + 'px';
@@ -133,8 +139,8 @@ export function helpMenu(anchor, { title, text, start, startLabel, closeLabel = 
     e.stopPropagation();
     const a = e.target.closest('[data-m]')?.dataset.m;
     if (a === 'close') close();
-    if (a === 'start') { close(); start(); }
+    if (a !== undefined && a !== 'close' && actions[+a]) { close(); actions[+a].run(); }
   });
   setTimeout(() => addEventListener('click', away, true));
-  m.querySelector('[data-m="start"]').focus({ preventScroll: true });
+  m.querySelector('[data-m="0"]').focus({ preventScroll: true });
 }
