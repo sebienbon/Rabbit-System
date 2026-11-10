@@ -346,6 +346,25 @@ var UIAPI = (function () {
     props.setProperty('UIS_' + token, JSON.stringify({ u: user.username, exp: Date.now() + SESSION_DAYS * 86400000, dev: deviceId, reg: registered }));
     return { token: token, user: publicUser_(user), sessionDays: SESSION_DAYS, registered: registered, via: 'pos' };
   }
+  /**
+   * Bar POS shared guest bill (owner 10/11): the POS sends the guest-bill lines of its open bills at once as Unpaid and
+   * asks here, before it takes a payment and every minute, which of them the reception settled meanwhile.
+   * { ts: [17-digit ids] } -> { lines: { ts: 'unpaid' | 'paid' | 'gone' } } ('paid' = still under that id but paid,
+   * 'gone' = not in Entries any more: settled at the reception, which gives the line a new id, or deleted there).
+   */
+  function pos_lines(body) {
+    var caller = auth_(session_(body.token));
+    if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account reads its lines');
+    var ts = Array.isArray(body.ts) ? body.ts.slice(0, 500) : [];
+    var ent = entries_(), out = {};
+    ts.forEach(function (t) {
+      t = String(t);
+      if (!isTs_(t)) return;
+      var r = ent.row(t);
+      out[t] = !r ? 'gone' : String(r[E.pay]) === 'Unpaid' ? 'unpaid' : 'paid';
+    });
+    return { lines: out };
+  }
   // One staff list (owner 09/11): the POS (its session, account bar-pos) reads who works here; no passwords leave.
   function pos_staff(body) {
     var caller = auth_(session_(body.token));
@@ -2595,7 +2614,7 @@ var UIAPI = (function () {
     soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, pos_lines: pos_lines }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;
