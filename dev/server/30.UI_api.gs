@@ -799,7 +799,7 @@ var UIAPI = (function () {
     ent.sheet.getRange(r, 1, rows.length, 17).setValues(rows.map(function (row) { return row.map(safe_); }));
     ent.sheet.getRange(r, 1, rows.length, 1).setNumberFormat('dd/MM/yyyy'); // like Entries Manual
     if (withSeller) ent.sheet.getRange(r, E.seller + 1, rows.length, 1).setValues(rows.map(function (row) {
-      return [row[E.type] === 'Income' && /@/.test(String(row[E.author])) ? row[E.author] : ''];
+      return [row[E.type] === 'Income' && /@/.test(String(row[E.author])) ? row[E.author] : (row.sellerName || '')];
     }));
     ent.last += rows.length;
   }
@@ -820,6 +820,8 @@ var UIAPI = (function () {
     s.getRange(r, M.ts + 1, n, 1).setNumberFormat('@');
     rng.setValues(rows); // one write: a failure never leaves half a row
     s.getRange(r, 1, n, 1).setNumberFormat('dd/MM/yyyy');
+    // Seller of a Bar POS line (owner 11/11): column R, only where there is one (nothing else of R touched)
+    entryRows.forEach(function (e, i) { if (e.sellerName) s.getRange(r + i, 18).setValue(safe_(e.sellerName)); });
     man.last += n;
   }
   /**
@@ -1517,8 +1519,12 @@ var UIAPI = (function () {
         var total = Math.round(q * unit), cost = Math.round(q * unitCost);
         var guest = text_(l.guest, 120, 'Guest'), obj = text_(l.object, 200, 'Product');
         if (!guest || !obj) throw apiError_('bad_payload', 'Guest and product are required');
-        return [day, 'Income', text_(l.category, 60, 'Category'), obj, q, unit, total, total, author,
+        var row = [day, 'Income', text_(l.category, 60, 'Category'), obj, q, unit, total, total, author,
           unitCost, cost, cost, guest, pay, ts, '', text_(l.comment, 300, 'Comment')];
+        // Bar POS (owner 11/11): who took the order, in Seller (T of Entries, R of Entries Manual). A name, never an
+        // email: Commis. only pays the lines whose Seller is an email.
+        if (l.seller) row.sellerName = text_(String(l.seller).replace(/@/g, ' '), 60, 'Seller');
+        return row;
       });
       var seen = {};
       rows.forEach(function (r) { if (seen[r[E.ts]]) throw apiError_('bad_payload', 'Duplicate line id'); seen[r[E.ts]] = 1; });
