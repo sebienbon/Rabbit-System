@@ -143,6 +143,8 @@ async function doPull(opts = {}) {
     lastBeds24 = r.beds24 || null;
     const v = (r.shift && r.shift.v) || 0;
     const applied = await db.all('applied');
+    // where the bar POS runs (owner 11/11): set in the POS's Options, read by the "Bar POS" button (app.js posUrl)
+    if (typeof r.posUrl === 'string') { try { localStorage.setItem('rabbitPosServer', r.posUrl); } catch { /* private mode */ } }
     const writes = [
       ['kv', 'put', r.catalog, 'catalog'],
       ['kv', 'put', r.payments, 'payments'],

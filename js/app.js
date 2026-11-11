@@ -17,8 +17,9 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const time = iso => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
 const dayTime = iso => iso ? new Date(iso).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 
-// Where the bar POS runs, for THIS computer (owner 09/11): the POS's own computer by default (CONFIG.POS_URL, localhost);
-// another computer of the wifi opens the app once with ?pos=http://<address>:8080 (kept here), ?pos=local to forget it.
+// Where the bar POS runs (owner 11/11): the address set in the POS's own Options (owner), which the POS sends to the
+// server and every pull brings here (sync.js → localStorage rabbitPosServer). Before that (older POS or server): the
+// address this computer was given once with ?pos=http://<address>:8080 (?pos=local forgets it), else CONFIG.POS_URL.
 const POS_KEY = 'rabbitPosUrl';
 let posSaved = null;
 (() => {
@@ -27,7 +28,7 @@ let posSaved = null;
   try { if (/^https?:\/\/[\w.-]+(:\d+)?\/?$/i.test(q)) { localStorage.setItem(POS_KEY, q.replace(/\/$/, '')); posSaved = q; } else localStorage.removeItem(POS_KEY); } catch { /* private mode */ }
   history.replaceState(null, '', location.pathname + location.hash);
 })();
-const posUrl = () => { try { return localStorage.getItem(POS_KEY) || CONFIG.POS_URL; } catch { return CONFIG.POS_URL; } };
+const posUrl = () => { try { return localStorage.getItem('rabbitPosServer') || localStorage.getItem(POS_KEY) || CONFIG.POS_URL; } catch { return CONFIG.POS_URL; } };
 
 const ui = { user: null, pickedUser: null, typedUser: false, closing: null, notice: null, busy: false, tab: 'sell' };
 const main = () => $('#main');

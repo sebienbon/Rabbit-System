@@ -365,6 +365,20 @@ var UIAPI = (function () {
     });
     return { lines: out };
   }
+  /**
+   * Where the bar POS runs (owner 11/11): its address on the wifi, set in the POS's own Options (owner) and sent here by
+   * the POS account; every reception computer's "Bar POS" button opens it (pull: posUrl). Nothing written in the code.
+   * { url: 'http://192.168.1.131:8080' | '' } -> { url }
+   */
+  function pos_address(body) {
+    var caller = auth_(session_(body.token));
+    if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account sets its address');
+    var url = String(body.url || '').trim().replace(/\/+$/, '');
+    if (url && !/^https?:\/\/[\w.-]+(:\d{1,5})?$/i.test(url)) throw apiError_('bad_request', 'Address like http://192.168.1.131:8080');
+    var props = PropertiesService.getScriptProperties();
+    if (url) props.setProperty('UI_POS_URL', url); else props.deleteProperty('UI_POS_URL');
+    return { url: url };
+  }
   // One staff list (owner 09/11): the POS (its session, account bar-pos) reads who works here; no passwords leave.
   function pos_staff(body) {
     var caller = auth_(session_(body.token));
@@ -408,6 +422,7 @@ var UIAPI = (function () {
       commissions: readCommissions_(ent, me),
       activities: readActivities_(),
       features: FEATURES,
+      posUrl: PropertiesService.getScriptProperties().getProperty('UI_POS_URL') || '', // where the bar POS runs (pos_address)
       beds24: beds24
     };
     if (sess.reg) {
@@ -2614,7 +2629,7 @@ var UIAPI = (function () {
     soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, pos_lines: pos_lines }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, pos_lines: pos_lines, pos_address: pos_address }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;
