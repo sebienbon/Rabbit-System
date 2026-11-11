@@ -638,11 +638,14 @@ var UIAPI = (function () {
       var s = ss_().getSheetByName(sheetName);
       if (!s || s.getLastRow() < 2) return;
       s.getRange(2, col, s.getLastRow() - 1, 1).getValues().forEach(function (r) {
-        var n = String(r[0]).trim(); if (n && !/^Expense/.test(n) && n !== 'Cash Supply') names[n] = true;
+        var n = String(r[0]).trim(); if (n && !/^Expense/.test(n) && n !== 'Cash Supply' && n !== 'Payment to Partner') names[n] = true;
       });
     }
     add(SHEETS.feed, 3);
     add(SHEETS.newGuest, 6);
+    // owner 11/11: the Beds24 sync writes new guests straight into Entries (column M) and 24datafeed no longer
+    // grows, so a guest who arrived lately (Maud…) was missing from the lists (reception and bar POS)
+    add(SHEETS.entries, E.guest + 1);
     return Object.keys(names).sort();
   }
   function shiftRows_() {
