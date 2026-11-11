@@ -379,6 +379,13 @@ var UIAPI = (function () {
     if (url) props.setProperty('UI_POS_URL', url); else props.deleteProperty('UI_POS_URL');
     return { url: url };
   }
+  // The guest names only (owner 11/11): a light read the bar POS makes every 5 minutes and when a name is not found,
+  // instead of the whole pull (every line of the reception) every 30 minutes.
+  function pos_guests(body) {
+    var caller = auth_(session_(body.token));
+    if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account reads the guests');
+    return { guests: readGuests_() };
+  }
   // One staff list (owner 09/11): the POS (its session, account bar-pos) reads who works here; no passwords leave.
   function pos_staff(body) {
     var caller = auth_(session_(body.token));
@@ -2632,7 +2639,7 @@ var UIAPI = (function () {
     soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, pos_lines: pos_lines, pos_address: pos_address }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, pos_lines: pos_lines, pos_address: pos_address, pos_guests: pos_guests }[body.action];
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;
