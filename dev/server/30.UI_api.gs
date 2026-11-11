@@ -349,8 +349,10 @@ var UIAPI = (function () {
   /**
    * Bar POS shared guest bill (owner 10/11): the POS sends the guest-bill lines of its open bills at once as Unpaid and
    * asks here, before it takes a payment and every minute, which of them the reception settled meanwhile.
-   * { ts: [17-digit ids] } -> { lines: { ts: 'unpaid' | 'paid' | 'gone' } } ('paid' = still under that id but paid,
-   * 'gone' = not in Entries any more: settled at the reception, which gives the line a new id, or deleted there).
+   * { ts: [17-digit ids] } -> { v: 2, lines: { ts: 'unpaid' | 'paid' | 'gone' } } ('paid' = still under that id but
+   * paid, or settled at the reception: a settle op of UI_Log moved it to a new id; 'gone' = not in Entries and never
+   * settled: deleted by hand or by a sheet script. Owner 11/11: a line deleted in the sheet was taken by the POS as paid
+   * at the reception; since v 2 the POS sends it again instead).
    */
   function pos_lines(body) {
     var caller = auth_(session_(body.token));
@@ -363,7 +365,23 @@ var UIAPI = (function () {
       var r = ent.row(t);
       out[t] = !r ? 'gone' : String(r[E.pay]) === 'Unpaid' ? 'unpaid' : 'paid';
     });
-    return { lines: out };
+    var missing = Object.keys(out).filter(function (t) { return out[t] === 'gone'; });
+    if (missing.length) {
+      var settled = settledTs_();
+      missing.forEach(function (t) { if (settled[t]) out[t] = 'paid'; });
+    }
+    return { v: 2, lines: out };
+  }
+  /** Old ids of the lines settled at the reception (settle ops of UI_Log, newest 3000 rows): { oldTs: true }. */
+  function settledTs_() {
+    var log = ss_().getSheetByName(SHEETS.log), out = {};
+    if (!log || log.getLastRow() < 2) return out;
+    var n = Math.min(3000, log.getLastRow() - 1), first = log.getLastRow() - n + 1;
+    log.getRange(first, 5, n, 6).getValues().forEach(function (r) {   // E type .. J payload
+      if (String(r[0]) !== 'settle' || String(r[3]) !== 'applied') return;
+      try { (JSON.parse(String(r[5])).items || []).forEach(function (it) { if (it && it.oldTs) out[String(it.oldTs)] = true; }); } catch (e) { /* cut payload */ }
+    });
+    return out;
   }
   /**
    * Where the bar POS runs (owner 11/11): its address on the wifi, set in the POS's own Options (owner) and sent here by
