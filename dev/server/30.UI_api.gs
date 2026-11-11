@@ -653,6 +653,12 @@ var UIAPI = (function () {
     // owner 11/11: the Beds24 sync writes new guests straight into Entries (column M) and 24datafeed no longer
     // grows, so a guest who arrived lately (Maud…) was missing from the lists (reception and bar POS)
     add(SHEETS.entries, E.guest + 1);
+    // owner 11/11: the staff are customers too (staff drinks / meals on their own bill): Data activities, column K
+    // (Staff), K2 and K5:K30 (K1 is the title, K3 "Food" and K4 "Kos kosan" are not people)
+    var da = ss_().getSheetByName(SHEETS.catalog);
+    if (da) da.getRange(2, 11, 29, 1).getValues().forEach(function (r, i) {
+      var n = String(r[0]).trim(); if (n && i !== 1 && i !== 2) names[n] = true;   // i 1, 2 = rows 3, 4
+    });
     return Object.keys(names).sort();
   }
   function shiftRows_() {
