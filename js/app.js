@@ -331,7 +331,7 @@ function showError(root, err) {
   p.textContent = err.message || String(err);
 }
 
-const OP_LABEL = { shift_open: 'Open shift', shift_close: 'Close shift', sale: 'Sale', line_update: 'Change', line_delete: 'Delete', settle: 'Bill payment', refund: 'Refund', expense: 'Expense',
+const OP_LABEL = { shift_open: 'Open shift', shift_close: 'Close shift', sale: 'Sale', line_update: 'Change', line_delete: 'Delete', line_split: 'Split line', settle: 'Bill payment', refund: 'Refund', expense: 'Expense',
   phantom: 'Phantom cash', phantom_solve: 'Phantom cash solved', cash_supply: 'Cash supply', partner_bill: 'Partner bill', partner_bill_delete: 'Partner bill deleted', partner_settle: 'Partner bill paid',
   card_settlement: 'Card settlement', bar_cashout: 'Bar cash-out',
   gear_return: 'Gear return', gear_out: 'Volunteer outing', gear_confirm: 'Gear difference', gear_lost: 'Gear given up as lost', gear_decide: 'Gear damage decision', gear_service: 'Gear repaired',

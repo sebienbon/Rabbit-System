@@ -789,3 +789,29 @@ test('Data activities lists are read to the last row: payment types, expense ite
   const r = findE(env, ts);
   assert.deepStrictEqual([r[1], r[2], r[3], r[11], r[13]], ['Expense', 'Other', 'Pajak', 10000, 'QRIS']);
 });
+
+test('line_split (owner 12/11): one unpaid line in two unpaid lines, then each paid its own way', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  openShift(env, ayu);
+  let r = push(env, ayu, op('line_split', { ts: OLD, newTs: newTs(), amount: 30000 }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  const lines = entriesRows(env).filter(x => x[12] === 'Old Guest');
+  assert.deepStrictEqual(lines.map(x => x[7]).sort(), [20000, 30000]);
+  assert.ok(lines.every(x => x[13] === 'Unpaid'));
+  const nl = lines.find(x => x[7] === 30000);
+  assert.match(String(nl[16]), /split/);
+  assert.strictEqual(findE(env, OLD)[5], 20000, 'price per unit follows (qty 1)');
+  assert.strictEqual(findM(env, nl[14])[7], 30000);
+  // replay: nothing twice
+  r = push(env, ayu, op('line_split', { ts: OLD, newTs: nl[14], amount: 30000 }));
+  assert.strictEqual(entriesRows(env).filter(x => x[12] === 'Old Guest').length, 2);
+  // refused: a paid line, an amount not below the line
+  r = push(env, ayu, op('line_split', { ts: RECENT, newTs: newTs(), amount: 1000 }));
+  assert.strictEqual(r.results[0].status, 'rejected');
+  r = push(env, ayu, op('line_split', { ts: OLD, newTs: newTs(), amount: 20000 }));
+  assert.strictEqual(r.results[0].status, 'rejected');
+  // each part paid its own way
+  r = push(env, ayu, op('settle', { payment: 'Cash', items: [{ oldTs: OLD, newTs: newTs() }] }), op('settle', { payment: 'Credit / Debit Card', items: [{ oldTs: nl[14], newTs: newTs() }] }));
+  assert.deepStrictEqual(entriesRows(env).filter(x => x[12] === 'Old Guest').map(x => x[13]).sort(), ['Cash', 'Credit / Debit Card']);
+});

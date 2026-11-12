@@ -1671,6 +1671,54 @@ var UIAPI = (function () {
       gearFollowLine_(op, me, ts, row, false);
       return { audit: { before: before } };
     },
+    /**
+     * Owner 12/11: one Unpaid line paid two ways (a room of 800 000: 500 000 cash + 300 000 card). The line keeps
+     * total - amount, a new Unpaid line (same guest, object, seller, comment + " · split") gets amount; then each is
+     * paid in Guest bills with its own way. payload: { ts, newTs, amount }. Same rule as a payment: the person on shift
+     * or a manager. Quantity kept, price per unit adjusted (a part of a night is not a night).
+     */
+    line_split: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      assertCashRight_(me);
+      var ts = String(p.ts), newTs = lineTs_(p.newTs, at);
+      var ent = entries_(), man = manual_();
+      if (ent.byTs[newTs]) return { already: true }; // retry after a cut connection
+      var rowNo = ent.byTs[ts];
+      if (!rowNo) throw apiError_('line_not_found', 'This line is no longer in the sheet');
+      var row = ent.rows[rowNo - 2].slice();
+      if (String(row[E.type]) !== 'Income' || String(row[E.pay]) !== 'Unpaid') throw apiError_('bad_payload', 'Only an unpaid sale can be split');
+      if (String(row[E.status] || '').trim()) throw apiError_('bad_payload', 'This sale is on a partner bill: it cannot be split');
+      var total = num_(row[E.total]) || num_(row[E.real]);
+      var a = amount_(p.amount, 'amount');
+      if (!(a > 0 && a < total)) throw apiError_('bad_amount', 'The new line must be between 1 and ' + (total - 1));
+      var before = lineOut_(row);
+      var set = function (r, v) {
+        var q = num_(r[E.qty]);
+        if (q) r[E.unit] = Math.round(v / q * 100) / 100;
+        if (r[E.total] !== '') r[E.total] = v;
+        r[E.real] = v;
+        if (r[E.cost] !== '' && total) { var c = Math.round(num_(r[E.cost]) * v / total); r[E.cost] = c; r[E.realCost] = c; }
+      };
+      var oldRow = row.map(safe_), newRow = row.slice(0, 17);
+      set(oldRow, total - a);
+      set(newRow, a);
+      newRow[E.ts] = newTs; newRow[E.comment] = (String(row[E.comment] || '') + ' · split').replace(/^ · /, '').slice(0, 300);
+      newRow.sellerName = /@/.test(String(row[E.author])) ? '' : String(row[E.seller] || '');
+      (ent.all[ts] || []).forEach(function (n) {
+        verify_(ent.sheet, n, E.ts + 1, ts);
+        ent.sheet.getRange(n, E.qty + 1, 1, 4).setValues([[oldRow[E.qty], oldRow[E.unit], oldRow[E.total], oldRow[E.real]]]);
+        ent.sheet.getRange(n, E.cost + 1, 1, 2).setValues([[oldRow[E.cost], oldRow[E.realCost]]]);
+      });
+      (man.all[ts] || []).forEach(function (n) {
+        verify_(man.sheet, n, M.ts + 1, ts);
+        man.sheet.getRange(n, M.real + 1).setValue(oldRow[E.real]);
+        man.sheet.getRange(n, M.realCost + 1).setValue(oldRow[E.realCost]);
+      });
+      appendEntries_(ent, [newRow], true);
+      appendManual_(man, [newRow]);
+      return { audit: { before: before } };
+    },
     /** Remove a line, every copy of it in both sheets (bottom-up so row numbers stay valid). */
     line_delete: function (op, me) {
       var p = op.payload || {};

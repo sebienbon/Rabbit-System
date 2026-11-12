@@ -59,6 +59,12 @@ export function applyOps(lines, ops, partnerLabels) {
       mark(l);
     } else if (op.type === 'line_delete') {
       byTs.delete(p.ts);
+    } else if (op.type === 'line_split') {   // owner 12/11: one unpaid line in two, each paid its own way
+      const l = byTs.get(p.ts);
+      if (!l || byTs.has(p.newTs) || !(p.amount > 0 && p.amount < l.total)) continue;
+      const part = (v, base) => { const x = { ...base, total: v }; if (base.qty) x.unit = Math.round(v / base.qty * 100) / 100; if (base.cost && base.total) x.cost = round(base.cost * v / base.total); return x; };
+      byTs.set(p.newTs, mark({ ...part(p.amount, l), ts: p.newTs, comment: ((l.comment || '') + ' · split').replace(/^ · /, '') }));
+      byTs.set(p.ts, mark(part(l.total - p.amount, l)));
     } else if (op.type === 'settle') {
       for (const it of p.items || []) {
         const l = byTs.get(it.oldTs);

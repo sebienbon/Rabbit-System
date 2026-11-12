@@ -599,7 +599,8 @@ function renderBill(root, d, guest) {
       <h3 class="sub">To pay ${helpTip('How to record a payment', PAY_RULES)}</h3>
       <ul class="lines">${unpaid.map(l => `<li class="line sel"><label class="check"><input type="checkbox" data-sel="${esc(l.ts)}"${ui.billSel.has(l.ts) ? ' checked' : ''}>
         <span class="what"><b>${esc(l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${lineDay(l.ts)} ${lineTime(l.ts)}</span></span></label>
-        <span class="amt num">${money(l.total)}</span>${l.pending ? '<span class="badge wait">Waiting</span>' : ''}</li>`).join('')}</ul>
+        <span style="grid-area: tags; display: flex; gap: 10px; align-items: center">${l.pending ? '<span class="badge wait">Waiting</span>' : ''}<button type="button" class="link" data-lsplit="${esc(l.ts)}" title="Two people pay this line, each their way">Split</button></span>
+        <span class="amt num">${money(l.total)}</span></li>`).join('')}</ul>
       <div class="ctotal"><span>Selected</span><b class="num" id="selTotal">Rp ${money(selTotal())}</b></div>
       <div class="pays" role="group" aria-label="Payment">${d.payments.filter(p => p !== 'Unpaid').map(p => `<button type="button" class="pay${ui.billPay === p ? ' on' : ''}" data-bpay="${esc(p)}" aria-pressed="${ui.billPay === p}">${esc(payLabel(p))}</button>`).join('')}</div>
       <button type="submit" class="primary wide">Record payment</button>
@@ -612,6 +613,16 @@ function renderBill(root, d, guest) {
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.back !== undefined) { ui.billGuest = null; ui.billSel = null; ui.billPay = null; d.render(); }
+    // owner 12/11: one line paid two ways (500 000 cash + 300 000 card): it becomes two unpaid lines, then each is paid
+    if (b.dataset.lsplit) {
+      const l = unpaid.find(x => x.ts === b.dataset.lsplit); if (!l) return;
+      const typed = prompt(`Split ${l.object.replace(/^-/, '')} · ${money(l.total)}\nAmount of the new line (the rest stays on this line):`, String(Math.round(l.total / 2)));
+      if (typed === null) return;
+      const a = Math.round(Number(String(typed).replace(/[^\d]/g, '')) || 0);
+      if (!(a > 0 && a < l.total)) { alert(`Type an amount between 1 and ${money(l.total - 1)}`); return; }
+      (async () => { await enqueue('line_split', { ts: l.ts, newTs: await nextTs(), amount: a });
+        ui.notice = `Line split: ${money(a)} + ${money(l.total - a)}. Tick each one and record its payment.`; ui.billSel = null; d.render(); })();
+    }
     if (b.dataset.bpay) { ui.billPay = b.dataset.bpay; root.querySelectorAll('[data-bpay]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); }
   });
   root.addEventListener('change', e => {
