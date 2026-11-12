@@ -394,3 +394,39 @@ test('Seb 09/11: an inventory done in "Pengembalian" does not pile up the same d
   const nout = gearOf(env, ayu).diffs.filter(d => d.kind === 'returned_not_out');
   assert.strictEqual(nout.length, all.length, 'one per number, not one per try');
 });
+
+test('Seb 12/11: status of a mask or bike set by hand, from the gear app or the desk (repaired = back in stock)', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  const res = (t, p) => push(env, t, op('gear_condition', p)).results[0];
+  // Gear staff: B1 broken (nothing to charge, not "to decide"), visible in their app with the note.
+  assert.strictEqual(res(made, { uid: id('U'), item: 'B1', condition: 'Broken', note: 'kurang angin' }).status, 'applied');
+  let g = gearOf(env, ayu);
+  assert.strictEqual(g.items.find(i => i.id === 'B1').condition, 'Broken');
+  const dm = g.damages.find(d => d.item === 'B1');
+  assert.strictEqual(dm.from, 'status'); assert.strictEqual(dm.decision, 'nocharge'); assert.strictEqual(dm.note, 'kurang angin');
+  assert.deepStrictEqual(env.call({ action: 'pull', token: made }).gear.broken, [{ id: 'B1', condition: 'Broken', note: 'kurang angin' }]);
+  // Not rentable while broken.
+  assert.ok(!gearOf(env, ayu).items.some(i => i.id === 'B1' && i.condition === 'OK'));
+  // Repaired from the gear app: back in stock, no difference created (unlike "Pengembalian").
+  assert.strictEqual(res(made, { uid: id('U'), item: 'B1', condition: 'OK' }).status, 'applied');
+  g = gearOf(env, ayu);
+  assert.strictEqual(g.items.find(i => i.id === 'B1').condition, 'OK');
+  assert.strictEqual(g.diffs.length, 0);
+  assert.ok(!g.damages.some(d => d.item === 'B1'), 'nothing left to show');
+  assert.deepStrictEqual(env.call({ action: 'pull', token: made }).gear.broken, []);
+  // The desk too; "Other" needs a comment; a mask has its own problems; same status twice = nothing.
+  assert.strictEqual(res(ayu, { uid: id('U'), item: 'SG001', condition: 'Other' }).status, 'rejected');
+  assert.strictEqual(res(ayu, { uid: id('U'), item: 'B1', condition: 'Snorkel missing' }).status, 'rejected');
+  assert.strictEqual(res(ayu, { uid: id('U'), item: 'SG001', condition: 'Snorkel missing', note: 'hilang' }).status, 'applied');
+  assert.strictEqual(gearOf(env, ayu).items.find(i => i.id === 'SG001').condition, 'Snorkel missing');
+  const before = env.book['Gear_Log'].data.length;
+  assert.strictEqual(res(ayu, { uid: id('U'), item: 'SG001', condition: 'Snorkel missing' }).status, 'applied');
+  assert.strictEqual(env.book['Gear_Log'].data.length, before, 'same status: nothing written');
+  // Out with a guest: refused (it changes when it comes back).
+  push(env, ayu, op('gear_out', { gid: id('G'), items: ['SG002'], guest: 'Volunteer', days: 1 }));
+  assert.strictEqual(res(made, { uid: id('U'), item: 'SG002', condition: 'Broken' }).status, 'rejected');
+  // The SG sheet mirror follows.
+  const sg = env.book['SG'].data.find(r => r[0] === 'SG001');
+  assert.ok(sg.includes('Snorkel missing'), JSON.stringify(sg));
+});

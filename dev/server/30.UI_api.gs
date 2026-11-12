@@ -1156,7 +1156,7 @@ var UIAPI = (function () {
   var gnote_ = function (v) { return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 300); }; // comment on a damage
   /** An operation made in the gear app: by a gear account, or by any account logged in there. */
   function gearSide_(me, p) { return me.role === 'gear' || !!(p && p.app === 'gear'); }
-  var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1, gear_return: 1 }; // what the gear role may send
+  var GEAR_OPS = { sunset_out: 1, sunset_back: 1, gear_count: 1, gear_confirm: 1, gear_return: 1, gear_condition: 1 }; // what the gear role may send
   /**
    * SG tab, our own layout: A number, B type (Mask / Bike), C in use (untick to retire a number)
    * are kept by hand; D–H are written by the interface from Gear_Log (do not edit); I is a free note.
@@ -1337,7 +1337,7 @@ var UIAPI = (function () {
         if (it) { it.where = 'lost'; it.condition = 'Lost'; }
       } else if (e.type === 'damage') {
         damages[e.id] = { id: e.id, item: e.item, condition: e.d.condition, note: e.d.note || '', at: e.at.toISOString(), guest: e.ref, from: e.d.from || 'return',
-          decision: 'pending', amount: null };
+          decision: e.d.from === 'status' ? 'nocharge' : 'pending', amount: null }; // a status change has no guest to charge
         if (it && e.d.condition !== 'OK') it.condition = e.d.condition;
         if (it && e.d.condition === 'Lost') { it.where = 'lost'; it.back = null; } // seen lost off the boat or at the check: out of service
       } else if (e.type === 'decide') {
@@ -1397,7 +1397,12 @@ var UIAPI = (function () {
     return { items: st.items.map(function (i) { return { id: i.id, kind: i.kind }; }), trips: st.trips,
       diffs: st.diffs.filter(function (d) { return d.kind !== 'returned_late' && d.kind !== 'returned_not_out'; }), // reception's business; would tell what was out
       countedToday: st.countedToday, lastCount: st.lastCount, sunsetSales: sunsetSalesToday_(ent), managerWa: set.managerWa,
-      unavailable: st.items.filter(function (i) { return i.condition !== 'OK' || i.where === 'lost'; }).map(function (i) { return i.id; }) };
+      unavailable: st.items.filter(function (i) { return i.condition !== 'OK' || i.where === 'lost'; }).map(function (i) { return i.id; }),
+      // Out of service in the box (what the staff reported): for "Kondisi barang", with the last note.
+      broken: st.items.filter(function (i) { return i.where === 'in' && i.condition !== 'OK'; }).map(function (i) {
+        var dm = st.damages.filter(function (d) { return d.item === i.id; }).pop();
+        return { id: i.id, condition: i.condition, note: dm ? dm.note : '' };
+      }) };
   }
   function gearForReception_(st, ent) {
     var set = gearSettings_(), from = Date.now() - COUNTS_DAYS * 86400000;
@@ -2442,6 +2447,32 @@ var UIAPI = (function () {
         gearCharge_(me, at, [{ ts: p.ts, object: 'Gear damage', qty: 1, unit: amount, guest: guest, comment: dm.item + ' ' + dm.condition }]);
       }
       gearLog_([{ at: at, id: did, type: 'decide', item: dm.item, ref: dm.id, by: me.username, d: { decision: decision, amount: amount } }]);
+      return {};
+    },
+    /**
+     * Status of a mask or bike in the box, set by hand (12/11): gear staff in their app or the desk.
+     * OK = repaired, back in stock (a "service" event). Anything else = out of service (a "damage"
+     * from "status", nothing to charge: no guest). Only for what is in the box, not out or lost.
+     */
+    gear_condition: function (op, me) {
+      var p = op.payload || {};
+      var at = parseAt_(op.at);
+      needSheets_([SHEETS.gearLog]);
+      if (!gearSide_(me, p)) assertCashRight_(me);
+      var uid = String(p.uid || ''); if (!/^U[\w-]{6,40}$/.test(uid)) throw apiError_('bad_payload', 'Invalid id');
+      var it = gearItem_(gearState_(), p.item);
+      var did = 'D' + uid + '-' + it.id;
+      if (gearEventDone_(uid) || gearEventDone_(did)) return { already: true };
+      var cond = String(p.condition || '');
+      var allowed = it.kind === 'bike' ? ['OK', 'Broken', 'Other'] : ['OK', 'Broken', 'Ring missing', 'Snorkel missing', 'Mask missing', 'Other'];
+      if (allowed.indexOf(cond) < 0) throw apiError_('bad_payload', 'Unknown status ' + cond);
+      if (it.where !== 'in') throw apiError_('bad_payload', it.id + ' is not in the box (' + it.where + '): its status changes when it comes back');
+      var note = String(p.note || '').slice(0, 300);
+      if (cond === 'Other' && !note.trim()) throw apiError_('bad_payload', 'Say what is wrong');
+      if (cond === it.condition) return { same: true };
+      if (cond === 'OK') gearLog_([{ at: at, id: uid, type: 'service', item: it.id, ref: '', by: me.username, d: { via: 'status', note: note } }]);
+      else gearLog_([{ at: at, id: did, type: 'damage', item: it.id, ref: '', by: me.username, d: { condition: cond, from: 'status', note: note } }]);
+      sgUpdate_();
       return {};
     },
     /** Repaired or replaced: the number is back in stock. */

@@ -111,6 +111,32 @@ export async function renderGear(root, d) {
         : '<span class="small warnline">late — no extension price in Gear_Settings</span>') : ''}</div>`;
   }).join('');
 
+  // A status set by hand (gear app or here) has nothing to decide: it shows in "Status" only.
+  const dmgs = g.damages.filter(x => x.from !== 'status');
+  // ---- Status of masks & bikes (12/11): what is in the box, broken or not; change it by hand.
+  const COND_ALL = kind => (kind === 'bike' ? ['OK', 'Broken', 'Other'] : ['OK', 'Broken', 'Ring missing', 'Snorkel missing', 'Mask missing', 'Other']);
+  const lastNote = id => { const x = g.damages.filter(dm => dm.item === id && dm.note).pop(); return x ? x.note : ''; };
+  const statusCard = () => {
+    const st = ui.gst;
+    const box = g.items.filter(i => i.where === 'in');
+    const broken = box.filter(i => i.condition !== 'OK');
+    const cell = i => `<button type="button" class="gstcell${i.condition !== 'OK' ? ' bad' : ''}${st && st.id === i.id ? ' on' : ''}" data-gst="${esc(i.id)}"${allowed ? '' : ' disabled'} title="${esc(i.condition)}">${esc(i.id)}</button>`;
+    const edit = st ? (() => {
+      const it = byId.get(st.id) || { kind: 'mask', condition: 'OK' };
+      return `<div class="gstedit"><b>${esc(st.id)}</b> <span class="muted small">now: ${esc(it.condition)}${lastNote(st.id) ? ' “' + esc(lastNote(st.id)) + '”' : ''}</span>
+        <div class="gstconds">${COND_ALL(it.kind).map(c => `<button type="button" class="${st.cond === c ? 'on' : ''}" data-gstc="${esc(c)}">${c === 'OK' ? 'OK · repaired' : esc(c)}</button>`).join('')}</div>
+        ${st.cond && st.cond !== 'OK' ? `<input data-gstnote value="${esc(st.note || '')}" placeholder="What is wrong${st.cond === 'Other' ? ' (required)' : ''}">` : ''}
+        <p class="error" data-gsterr role="alert">${esc(st.err || '')}</p>
+        <button type="button" class="primary small" data-gstsave${st.cond && st.cond !== it.condition ? '' : ' disabled'}>Save</button>
+        <button type="button" class="ghost small" data-gstcancel>Cancel</button></div>`;
+    })() : '';
+    return `<section class="card gcard"><h2>Status of masks &amp; bikes <span class="muted">· ${broken.length ? broken.length + ' out of service' : 'all OK'}</span></h2>
+      ${broken.length ? `<ul class="gl">${broken.map(i => `<li class="gdiff"><b class="gnum">${esc(i.id)}</b><div><b>${esc(i.condition)}</b>${lastNote(i.id) ? ` <span class="small">“${esc(lastNote(i.id))}”</span>` : ''}${i.pending ? ' <span class="badge wait">Waiting</span>' : ''}</div>
+        <div class="gacts">${allowed ? `<button type="button" class="ghost small" data-gservice="${esc(i.id)}">Repaired · back in stock</button>` : ''}</div></li>`).join('')}</ul>` : ''}
+      <p class="muted small">In the box: tap a number to change its status (repaired, broken, part missing). Out with a guest: it changes when it comes back.</p>
+      <div class="gstgrid">${box.map(cell).join('')}</div>${edit}</section>`;
+  };
+
   root.innerHTML = `<div class="gearpage">
     ${g.diffs.length ? `<section class="card gcard bad"><h2>Differences to solve together</h2>${(() => {
       const nout = g.diffs.filter(x => x.kind === 'returned_not_out' && !x.reception && !x.pending);
@@ -131,7 +157,8 @@ export async function renderGear(root, d) {
           ${g.trips.length ? `<div class="gsunset"><b>Sunset Boat today</b> · ${sunsetOut} mask${sunsetOut === 1 ? '' : 's'} on the boat now · ${sunsetDay} taken today · ${g.sunsetSales} Sunset Boat guest${g.sunsetSales === 1 ? '' : 's'} in the sales
             ${sunsetDay !== g.sunsetSales ? `<span class="muted small"> · ${Math.abs(sunsetDay - g.sunsetSales)} ${sunsetDay > g.sunsetSales ? 'more' : 'fewer'} mask${Math.abs(sunsetDay - g.sunsetSales) === 1 ? '' : 's'} taken than guests recorded</span>` : ''}</div>` : ''}
         </section>
-        ${g.damages.length ? `<section class="card gcard"><h2>Damage to decide</h2><ul class="gl">${g.damages.map(dmgRow).join('')}</ul>
+        ${statusCard()}
+        ${dmgs.length ? `<section class="card gcard"><h2>Damage to decide</h2><ul class="gl">${dmgs.map(dmgRow).join('')}</ul>
           <p class="muted small">Prices come from the Gear_Settings sheet. Charging adds an Unpaid line to the guest’s bill.</p></section>` : ''}
       </div>
       <div class="col">
@@ -196,6 +223,7 @@ export async function renderGear(root, d) {
     const t = e.target;
     if (t.dataset.dmgamt) { const v = parseMoney(t.value); t.value = v === null ? '' : money(v); ui.dmg[t.dataset.dmgamt].amount = v; }
     if (t.dataset.dmgguest) ui.dmg[t.dataset.dmgguest].guest = t.value;
+    if (t.dataset.gstnote !== undefined && ui.gst) ui.gst.note = t.value;
   });
   root.addEventListener('click', async e => {
     const b = e.target.closest('button'); if (!b) return;
@@ -256,8 +284,20 @@ export async function renderGear(root, d) {
       ui.notice = `Charged Rp ${money(f.amount)} to ${f.guest} (Unpaid).`; d.render(); return;
     }
     if (ds.dmgno) { b.disabled = true; await enqueue('gear_decide', { did: newId('E'), damage: ds.dmgno, decision: 'nocharge' }); ui.notice = 'Not charged.'; d.render(); return; }
+    if (ds.gst) { ui.gst = ui.gst && ui.gst.id === ds.gst ? null : { id: ds.gst, cond: '', note: '' }; d.render(); return; }
+    if (ds.gstc) { ui.gst.cond = ds.gstc; ui.gst.err = ''; d.render(); return; }
+    if (ds.gstcancel !== undefined) { ui.gst = null; d.render(); return; }
+    if (ds.gstsave !== undefined) {
+      const st = ui.gst;
+      const note = String(root.querySelector('[data-gstnote]')?.value || st.note || '').trim();
+      if (st.cond === 'Other' && !note) { st.err = 'Say what is wrong.'; d.render(); return; }
+      b.disabled = true;
+      await enqueue('gear_condition', { uid: newId('U'), item: st.id, condition: st.cond, note: st.cond === 'OK' ? '' : note });
+      ui.notice = st.cond === 'OK' ? `${st.id} is back in stock.` : `${st.id}: ${st.cond} — out of service until repaired.`;
+      ui.gst = null; d.render(); return;
+    }
     if (ds.gservice) { b.disabled = true; await enqueue('gear_service', { sid: newId('R'), item: ds.gservice }); ui.notice = `${ds.gservice} is back in stock.`; d.render(); return; }
   });
 }
 
-export const gearBusy = ui => ui.tab === 'gear' && !!((ui.gearRet && ui.gearRet.items.length) || (ui.gearVol && ui.gearVol.items.length) || ui.dfLost);
+export const gearBusy = ui => ui.tab === 'gear' && !!((ui.gearRet && ui.gearRet.items.length) || (ui.gearVol && ui.gearVol.items.length) || ui.dfLost || ui.gst);

@@ -170,6 +170,25 @@ export function applyGearOps(snap, ops, side = 'reception') {
       g.countedToday = true; g.lastCount = { at: op.at, by: op.by, pending: !!pending, n: (p.items || []).length };
       g.localCounts.push({ at: op.at, seen: (p.items || []).map(x => String(x && x.item || '').toUpperCase()) });
       for (const x of p.items || []) { const it = items.get(String(x && x.item || '').toUpperCase()); if (it) damageSeen(it, x.condition, 'D' + p.cid + '-' + it.id, it.last ? it.last.guest : ''); }
+      if (Array.isArray(g.broken)) for (const x of p.items || []) {
+        const id = String(x && x.item || '').toUpperCase();
+        if (x && x.condition && x.condition !== 'OK' && !g.broken.some(b => b.id === id)) g.broken.push({ id, condition: x.condition, note: x.note || '', pending: !!pending });
+      }
+    } else if (op.type === 'gear_condition') {
+      // Status set by hand: OK = repaired (as gear_service), else out of service, nothing to charge.
+      const it = items.get(p.item);
+      if (Array.isArray(g.broken)) { // the gear app: its list of what is out of service
+        g.broken = g.broken.filter(b => b.id !== p.item);
+        if (p.condition && p.condition !== 'OK') g.broken.push({ id: p.item, condition: p.condition, note: p.note || '', pending: !!pending });
+      }
+      if (it && (it.where === undefined || it.where === 'in')) {
+        if (p.condition === 'OK') { it.condition = 'OK'; mark(it); for (const [k, dm] of damages) if (dm.item === p.item) { if (dm.decision !== 'pending') damages.delete(k); else dm.serviced = true; } }
+        else if (p.condition && p.condition !== it.condition) {
+          it.condition = p.condition; mark(it);
+          const did = 'D' + p.uid + '-' + it.id;
+          if (!damages.has(did)) damages.set(did, { id: did, item: it.id, condition: p.condition, note: p.note || '', guest: '', from: 'status', decision: 'nocharge', pending: true });
+        }
+      }
     } else if (op.type === 'gear_service') {
       const it = items.get(p.item); if (it) { it.condition = 'OK'; if (it.where === 'lost') it.where = 'in'; mark(it); }
       for (const [k, dm] of damages) if (dm.item === p.item) { if (dm.decision !== 'pending') damages.delete(k); else dm.serviced = true; }

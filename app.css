@@ -722,3 +722,16 @@ h3.sub .help-pop { left: -4px; }
 .gearpick .gbroken b { min-width: 52px; }
 .gearpick .gbroken span { color: var(--coral, #c2410c); flex: 1; min-width: 120px; }
 .gearpick .gbroken button { width: auto; }
+
+/* Gear: status of masks & bikes (reception) */
+.gstgrid { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.gstcell { border: 1px solid var(--line); background: var(--paper); border-radius: 10px; padding: 6px 9px; font: 700 .85rem var(--sans); color: var(--ink); cursor: pointer; min-width: 62px; }
+.gstcell.bad { border-color: var(--coral, #e05252); color: var(--coral, #c2410c); background: #fff1f1; }
+.gstcell.on { outline: 3px solid var(--accent); }
+.gstcell:disabled { cursor: default; opacity: .7; }
+.gstedit { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px; }
+.gstconds { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.gstconds button { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 5px 11px; font: 600 .85rem var(--sans); cursor: pointer; color: var(--ink); }
+.gstconds button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.gstedit input { width: 100%; margin: 4px 0; }
+textarea.ganote { font: inherit; }

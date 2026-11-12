@@ -198,6 +198,8 @@ const SCREENS = {
         'Volunteer', 'Pemakaian gratis tanpa penjualan (volunteer): catat nomor yang keluar.'],
       [sec('Differences to solve together'), 'Differences', 'What the gear staff counted does not match the records. Check it with them: each side confirms, then it closes. *Checked · all* closes many at once.',
         'Selisih', 'Hitungan staf gear tidak cocok dengan catatan. Cek bersama mereka: masing-masing konfirmasi, lalu selisih tertutup. *Checked · all* menutup banyak sekaligus.'],
+      [sec('Status of masks'), 'Status of masks & bikes', 'Broken ones cannot be rented. Repaired? *Repaired · back in stock*. Tap a number to mark it broken or missing a part. The gear staff can do the same in their app (*Kondisi barang*).',
+        'Kondisi masker & sepeda', 'Yang rusak tidak bisa disewa. Sudah diperbaiki? *Repaired · back in stock*. Sentuh nomor untuk menandai rusak atau ada bagian hilang. Staf gear bisa melakukan hal yang sama di aplikasinya (*Kondisi barang*).'],
       [sec('Damage to decide'), 'Damage to decide', 'Broken or missing part: charge the guest (an Unpaid line on their bill), don’t charge, or keep it for later.',
         'Kerusakan', 'Rusak atau ada bagian hilang: tagih tamu (baris Unpaid di tagihannya), tidak ditagih, atau putuskan nanti.'],
       [sec('Evening check'), 'Evening check', 'Every evening around 20:00 the gear staff count everything in their app (*Cek malam*). Not done = reminder here.',

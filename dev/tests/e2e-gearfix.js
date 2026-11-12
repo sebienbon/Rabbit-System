@@ -54,6 +54,34 @@ const step = m => console.log('  ✓ ' + m);
     await desk.click('[data-tab="gear"]'); await desk.waitForTimeout(800);
     assert.ok(await desk.$('.gdiff:has-text("B1443") [data-gservice="B1443"]'), 'Repaired button on a damage still to decide');
     step('Gear: "Repaired · back in stock" also on a damage still to decide');
+    // 12/11 (2): "Kondisi barang" in the gear app — B1443 repaired by the gear staff, SG003 broken.
+    await phone.click('[data-go="home"]').catch(() => {});
+    await phone.waitForSelector('[data-go="status"]');
+    await phone.click('[data-go="status"]');
+    await phone.waitForSelector('[data-stfix="B1443"]');
+    assert.match(await phone.textContent('.gabody'), /B1443\s*Rusak\s*“kurang angin”/);
+    await phone.click('[data-stfix="B1443"]');
+    await until(() => log().some(r => r[2] === 'service' && r[3] === 'B1443'), 'repaired from the gear app');
+    await phone.click('[data-stcell="SG003"]'); await phone.click('[data-stc="Ring missing"]'); await phone.fill('[data-stnote]', 'ring hilang di pantai');
+    await phone.screenshot({ path: __dirname + '/shots/gearfix-status-phone.png' });
+    await phone.click('[data-stsave]');
+    await until(() => log().some(r => r[2] === 'damage' && r[3] === 'SG003' && /status/.test(r[7])), 'SG003 broken from the gear app');
+    assert.ok(!log().some(r => r[2] === 'diff' && (r[3] === 'B1443' || r[3] === 'SG003')), 'no difference created');
+    step('gear app "Kondisi barang": repaired → back in stock, broken → out of service, no difference');
+
+    // Reception: the Status card shows SG003 with its note; change SG004 by hand, then repair SG003.
+    await desk.click('#refreshBtn'); await desk.waitForTimeout(2500);
+    await desk.click('[data-tab="gear"]'); await desk.waitForSelector('[data-gst="SG004"]');
+    assert.match(await desk.textContent('.gcard:has(h2:text-matches("Status of masks"))'), /SG003\s*Ring missing\s*“ring hilang di pantai”/);
+    assert.ok(!(await desk.$('.gcard:has(h2:text("Damage to decide")) [data-gservice="SG003"]')), 'a status change is not a damage to decide');
+    await desk.click('[data-gst="SG004"]'); await desk.click('[data-gstc="Broken"]'); await desk.fill('[data-gstnote]', 'kaca retak');
+    await desk.screenshot({ path: __dirname + '/shots/gearfix-status-desk.png', fullPage: true });
+    await desk.click('[data-gstsave]');
+    await until(() => log().some(r => r[2] === 'damage' && r[3] === 'SG004'), 'SG004 from the desk');
+    await desk.waitForSelector('.gcard [data-gservice="SG003"]');
+    await desk.click('.gcard [data-gservice="SG003"]');
+    await until(() => log().some(r => r[2] === 'service' && r[3] === 'SG003'), 'SG003 repaired at the desk');
+    step('reception "Status of masks & bikes": broken by hand, repaired by hand');
     assert.deepStrictEqual(errors, []);
     console.log('\nE2E GEAR FIX OK');
   } catch (e) {

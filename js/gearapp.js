@@ -213,11 +213,51 @@ function home(g) {
       <span>Tamu mengembalikan masker atau sepeda kepada Anda</span></button>
     <button type="button" class="gatile${due ? ' due' : ''}" data-go="count"><b>Cek malam</b>
       <span>${g.countedToday ? `Sudah dilakukan ${hhmm(g.lastCount.at)}${g.lastCount.pending ? ' · menunggu dikirim' : ''}` : 'Belum dilakukan · sekitar jam 20:00'}</span></button>
+    <button type="button" class="gatile${(g.broken || []).length ? ' bad' : ''}" data-go="status"><b>Kondisi barang</b>
+      <span>${(g.broken || []).length ? `${g.broken.length} tidak bisa disewa: ${esc(g.broken.map(b => b.id).join(', '))}` : 'Semua baik · laporkan kerusakan atau perbaikan'}</span></button>
     <button type="button" class="gatile${diffs ? ' bad' : ''}" data-go="diffs"><b>Selisih</b>
       <span>${diffs ? `${diffs} perlu dicek bersama resepsionis` : 'Tidak ada selisih'}</span></button>
     ${g.managerWa ? `<a class="ghost wide gawa" target="_blank" rel="noopener" href="${waLink(g.managerWa, 'Halo, ini staf gear Rabbit Tree. ')}">WhatsApp manajer</a>` : ''}
     ${ask ? '<button type="button" class="ghost wide" data-notify>Aktifkan pengingat jam 20:00</button>' : ''}
     <p class="muted small center">Pengingat jam 20:00 hanya muncul jika aplikasi ini tetap terbuka di HP.</p>
+  </div>`;
+}
+
+// ---------- Kondisi barang: status of a mask or bike, set by hand (12/11) ----------
+// Repaired → "Sudah diperbaiki": back in stock. Broken → choose the problem: out of service.
+// Not "Pengembalian" (that is a guest giving something back) and not the evening check.
+function status(g) {
+  const broken = g.broken || [];
+  const st = ui.st;
+  if (st) {
+    const it = g.items.find(i => i.id === st.id) || { id: st.id, kind: /^SG/.test(st.id) ? 'mask' : 'bike' };
+    const conds = CONDS(it.kind).filter(c => c !== 'OK');
+    return `${bar('Kondisi barang')}<div class="gabody">
+      <h1>${esc(st.id)} · ada masalah</h1>
+      <p class="muted">Apa masalahnya? ${esc(st.id)} tidak bisa disewa sampai ditandai <b>Sudah diperbaiki</b>.</p>
+      <div class="gaconds">${conds.map(c => `<button type="button" class="${st.cond === c ? 'on' : ''}" data-stc="${esc(c)}" aria-pressed="${st.cond === c}">${esc(COND[c] || c)}</button>`).join('')}</div>
+      <textarea class="ganote" data-stnote rows="2" placeholder="Komentar${st.cond === 'Other' ? ' (wajib)' : ''}">${esc(st.note || '')}</textarea>
+      ${g.managerWa ? `<button type="button" class="ghost wide gawa" data-stwa>Kirim foto ke manajer (WhatsApp)</button>` : ''}
+      ${st.err ? `<div class="phwarn" data-err>${esc(st.err)}</div>` : ''}
+      <button type="button" class="primary wide" data-stsave${st.cond ? '' : ' disabled'}>Simpan: ${esc(st.id)} rusak</button>
+      <button type="button" class="ghost small" data-stcancel>Batal</button></div>`;
+  }
+  const brokenIds = new Set(broken.map(b => b.id));
+  const ok = g.items.filter(i => !brokenIds.has(i.id));
+  const cells = (list, cls) => `<div class="gagrid ${cls}">${list.map(it => `<button type="button" class="gacell" data-stcell="${esc(it.id)}">${esc(it.id)}</button>`).join('')}</div>`;
+  const masks = ok.filter(i => i.kind === 'mask'), bikes = ok.filter(i => i.kind === 'bike');
+  return `${bar('Kondisi barang')}<div class="gabody">
+    <h1>Kondisi barang</h1>
+    <p class="muted">Untuk masker dan sepeda yang <b>ada di depan Anda</b>. Bukan untuk barang yang dikembalikan tamu (→ Pengembalian).</p>
+    <h2>Tidak bisa disewa <span class="muted">· ${broken.length}</span></h2>
+    ${broken.length ? `<div class="garev">${broken.map(b => `<div class="card garow1 bad"><b class="gnum">${esc(b.id)}</b>
+      <span>${esc(COND[b.condition] || b.condition)}${b.note ? ` <span class="small">“${esc(b.note)}”</span>` : ''}${b.pending ? ' <span class="muted small">· menunggu dikirim</span>' : ''}</span>
+      <button type="button" class="primary small" data-stfix="${esc(b.id)}">Sudah diperbaiki</button></div>`).join('')}</div>`
+      : '<p class="muted">Semua masker dan sepeda bisa disewa.</p>'}
+    <h2>Laporkan kerusakan</h2>
+    <p class="muted small">Sentuh nomor yang rusak atau ada bagian yang hilang.</p>
+    ${masks.length ? `<h3 class="muted small">Masker</h3>${cells(masks, 'six')}` : ''}
+    ${bikes.length ? `<h3 class="muted small">Sepeda</h3>${cells(bikes, 'three')}` : ''}
   </div>`;
 }
 
@@ -333,12 +373,12 @@ async function renderNow() {
   const rejected = s === 'home' ? await db.all('rejected') : [];
   main().innerHTML = (ui.notice ? `<div class="notice" role="status">${esc(ui.notice)}</div>` : '') +
     (s === 'home' ? attention(rejected) : '') +
-    (s === 'sunset' ? sunset(g) : s === 'count' ? count(g) : s === 'ret' ? ret(g) : s === 'diffs' ? diffs(g) : home(g)) +
+    (s === 'sunset' ? sunset(g) : s === 'count' ? count(g) : s === 'ret' ? ret(g) : s === 'diffs' ? diffs(g) : s === 'status' ? status(g) : home(g)) +
     (s === 'home' ? '<p class="center"><button type="button" class="ghost small" data-logout>Keluar</button></p>' : '');
   ui.notice = '';
   ui.g = g;
 }
-const busy = () => tourRunning() || ui.sel.size || (ui.count && Object.keys(ui.count.items).length);
+const busy = () => tourRunning() || !!ui.st || ui.sel.size || (ui.count && Object.keys(ui.count.items).length);
 
 document.addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b || !ui.user) return;
@@ -347,7 +387,28 @@ document.addEventListener('click', async e => {
     helpMenu(b, { title: 'Panduan', text: 'Penjelasan setiap layar, langkah demi langkah. Selama panduan, tidak ada yang tersimpan.', startLabel: 'Mulai panduan ›', closeLabel: 'Tutup', start: runTour });
     return;
   }
+  if (ds.stcell) { ui.st = { id: ds.stcell, cond: '', note: '' }; render(); scrollTo(0, 0); return; }
+  if (ds.stc) { ui.st.cond = ds.stc; ui.st.err = ''; render(); return; }
+  if (ds.stcancel !== undefined) { ui.st = null; render(); return; }
+  if (ds.stwa !== undefined) {
+    const st = ui.st;
+    window.open(waLink(ui.g.managerWa, `Kondisi barang ${dayText()}: ${st.id} — ${COND[st.cond] || 'rusak'}.${st.note ? ' ' + st.note.trim() + '.' : ''} Foto terlampir.`), '_blank', 'noopener');
+    return;
+  }
+  if (ds.stsave !== undefined) {
+    const st = ui.st;
+    if (st.cond === 'Other' && !String(st.note || '').trim()) { st.err = 'Tulis komentar untuk “Lainnya”.'; render(); return; }
+    b.disabled = true;
+    await enqueue('gear_condition', { uid: newId('U'), item: st.id, condition: st.cond, note: String(st.note || '').trim() });
+    ui.notice = `${st.id}: ${COND[st.cond] || st.cond}. Tidak bisa disewa sampai diperbaiki.`; ui.st = null; render(); scrollTo(0, 0); return;
+  }
+  if (ds.stfix) {
+    b.disabled = true;
+    await enqueue('gear_condition', { uid: newId('U'), item: ds.stfix, condition: 'OK', note: '' });
+    ui.notice = `${ds.stfix} sudah diperbaiki: bisa disewa lagi.`; render(); return;
+  }
   if (ds.go) {
+    ui.st = null;
     if (ds.go === 'home' && history.state && history.state.gear) { history.back(); return; } // popstate draws the menu
     goScreen(ds.go); render(); scrollTo(0, 0); return;
   }
@@ -447,6 +508,7 @@ document.addEventListener('click', async e => {
 document.addEventListener('input', e => {
   const t = e.target;
   if (t.dataset && t.dataset.note !== undefined && ui.count) { ui.count.notes[t.dataset.note] = t.value; saveDraft(); }
+  if (t.dataset && t.dataset.stnote !== undefined && ui.st) ui.st.note = t.value;
 });
 
 // ---------- guided tour (the "?" in the header) ----------
@@ -480,6 +542,8 @@ function runTour() {
       text: 'Setiap malam sekitar jam *20:00*, hitung semua masker dan sepeda di sini. *Cukup 1 kali* per malam.' },
     { show: () => screen('home'), el: '[data-go="diffs"]', title: 'Selisih',
       text: 'Barang yang tidak cocok antara hitungan Anda dan catatan resepsionis. Diselesaikan bersama resepsionis.' },
+    { show: () => screen('home'), el: '[data-go="status"]', title: 'Kondisi barang',
+      text: 'Masker atau sepeda *rusak*, atau *sudah diperbaiki*? Ubah kondisinya di sini.\nBarang rusak tidak bisa disewa sampai ditandai *Sudah diperbaiki*. Bukan Pengembalian!' },
     { show: () => screen('home'), el: '.gahome .gawa', title: 'WhatsApp manajer',
       text: 'Ada masalah atau tidak yakin? Hubungi manajer langsung dari sini.' },
 
