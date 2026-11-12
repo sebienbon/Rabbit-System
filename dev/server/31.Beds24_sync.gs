@@ -16,6 +16,7 @@
  *      lines) becomes one Room row "Unpaid".
  *   4. Booking cancelled: its Unpaid rows become "Cancelled" (amount 0). Paid rows are never
  *      touched: they are reported in B24_Control.
+ *   Price lowered in Beds24 after that: the Unpaid row of the booking is lowered too (paid rows never).
  *   Differences (amount changed in Beds24, overpaid booking…) go to B24_Control.
  *
  * Payment modes = the list of Data activities, column Q (same list as the reception). In Beds24 the
@@ -330,6 +331,26 @@ var B24 = (function () {
       var notInBeds24 = mine.filter(function (l) { return l.pay !== PAY_CANCELLED && (l.pay === PAY_UNPAID || !l.lineId); })
         .reduce(function (s, l) { return s + l.amount; }, 0);
       var due = round_(charges_(b) - beds24Paid - notInBeds24);
+      // Price lowered in Beds24 after the Unpaid line was written (room change, discount…):
+      // the Unpaid lines of this booking follow, newest first. A paid line is never touched.
+      if (due < -0.5) {
+        var left = -due;
+        mine.filter(function (l) { return l.pay === PAY_UNPAID && l.amount > 0; })
+          .sort(function (x, y) { return x.ts < y.ts ? 1 : -1; })
+          .forEach(function (l) {
+            if (left <= 0.5) return;
+            var cut = Math.min(left, l.amount), to = round_(l.amount - cut);
+            left = round_(left - cut);
+            act('Lower Unpaid line (price changed in Beds24)', b, guest + ' · ' + l.amount + ' → ' + to + ' (row ' + l.rowNo + ')');
+            if (live) {
+              ent.sheet.getRange(l.rowNo, E.real + 1).setValue(to);
+              if (to <= 0.5) ent.sheet.getRange(l.rowNo, E.pay + 1).setValue(PAY_CANCELLED);
+              ent.sheet.getRange(l.rowNo, E.comment + 1).setValue('From Beds24: still to pay (price changed in Beds24, was ' + l.amount + ')');
+            }
+            l.amount = to;
+          });
+        due = -left;
+      }
       var channel = prepaid_(b);
       if (due > 0.5 && channel) {
         act('Record prepaid (' + channel + ')', b, guest + ' · ' + room + ' · ' + due + ' · ' + transferMode_());
