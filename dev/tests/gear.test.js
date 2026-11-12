@@ -444,4 +444,8 @@ test('Seb 12/11: a number touched by mistake at the evening check (it is with th
   assert.ok(!g.diffs.some(d => d.id === df.id), 'closed');
   assert.strictEqual(g.items.find(i => i.id === 'SG001').where, 'out', 'still out with the guest');
   assert.ok(!env.book['Gear_Log'].data.some(r => r[2] === 'return' && r[3] === 'SG001'), 'no return written');
+  // The managers get one email (not one per side).
+  const m = env.mails.filter(x => /count mistake on SG001/.test(x.subject));
+  assert.strictEqual(m.length, 1, JSON.stringify(env.mails.map(x => x.subject)));
+  assert.match(m[0].to, /therabbittreemanager@gmail.com/); assert.match(m[0].body, /Volunteer/); assert.match(m[0].body, /Counted by made/);
 });

@@ -1068,7 +1068,7 @@ var UIAPI = (function () {
    * Sends one email once per operation (a retry after a later failure does not send it again).
    * A mail failure (quota, bad address) never blocks the operation: it comes back as a warning.
    */
-  var MAIL_KINDS = ['cost', 'bill', 'settle', 'close', 'seller'];
+  var MAIL_KINDS = ['cost', 'bill', 'settle', 'close', 'seller', 'mistake'];
   var ALERT_TO = ['therabbittreemanager@gmail.com', 'sebien.legoff@gmail.com']; // manager, owner
   function mailOnce_(op, kind, msg) {
     var props = PropertiesService.getScriptProperties(), key = 'UI_MAIL_' + op.id + '_' + kind;
@@ -1327,7 +1327,7 @@ var UIAPI = (function () {
           seen: (e.d.items || []).map(function (x) { return String(x && x.item || ''); }) });
       } else if (e.type === 'diff') {
         diffs[e.id] = { id: e.id, item: e.item, kind: e.d.kind, at: e.at.toISOString(), count: e.ref, last: e.d.last || null, late: e.d.late || 0, due: e.d.due || null, returned: e.d.returned || null,
-          reception: false, gear: false, closed: false, note: '' };
+          reception: false, gear: false, closed: false, note: '', by: e.by || '' };
         if (e.d.kind === 'sale_unlinked') { diffs[e.id].reason = e.d.reason || ''; diffs[e.id].saleTs = e.d.saleTs || ''; diffs[e.id].guest = e.d.guest || ''; diffs[e.id].object = e.d.object || ''; }
       } else if (e.type === 'confirm') {
         var df = diffs[e.ref];
@@ -2406,6 +2406,16 @@ var UIAPI = (function () {
       gearCharge_(me, at, charges);
       gearLog_(rows);
       if (rows[0].type === 'return') sgUpdate_(df.item, { status: rows[0].d.condition });
+      // A count mistake at the evening check: the managers are told (once per difference, 12/11).
+      if (p.action === 'mistake') {
+        var last = df.last || {};
+        var w = mailOnce_({ id: df.id }, 'mistake', { to: ALERT_TO.concat([MAIL.alerts]),
+          subject: 'Rabbit Tree gear: count mistake on ' + df.item + ' (' + gfmt_(at, 'dd/MM/yyyy HH:mm') + ')',
+          body: 'At the evening check, ' + df.item + ' was counted in the box while it is out' + (last.guest ? ' with ' + last.guest : '') + '.\n' +
+            'Marked as a count mistake by ' + (me.name || me.username) + ' (' + side + (side === 'gear' ? ', gear app' : ', reception') + ')' + (p.note ? ': ' + String(p.note).slice(0, 300) : '') + '.\n' +
+            'It stays out' + (last.guest ? ' with ' + last.guest : '') + '. Counted by ' + (df.by || '?') + '.\n\nCheck it if this happens again: the staff may be touching numbers without looking.' });
+        if (w) warn.push(w);
+      }
       return warn.length ? { side: side, warning: warn.join(' ') } : { side: side };
     },
     /** Reception: a missing item is given up as lost; the loss goes to the damage decisions. */
