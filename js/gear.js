@@ -71,7 +71,8 @@ export async function renderGear(root, d) {
     } else if (df.kind === 'counted_but_out') {
       acts = `${late && extPrice(it) ? `<label class="check small"><input type="checkbox" data-dfext="${esc(df.id)}"${ui.dfNoExt && ui.dfNoExt[df.id] ? '' : ' checked'}> charge ${late} day${late > 1 ? 's' : ''} extension · ${money(late * extPrice(it))}</label>` : ''}
         <button type="button" class="primary small" data-dfret="${esc(df.id)}">Returned by guest</button>
-        <button type="button" class="ghost small" data-dfsite="${esc(df.id)}">Found on site · no extension</button>`;
+        <button type="button" class="ghost small" data-dfsite="${esc(df.id)}">Found on site · no extension</button>
+        <button type="button" class="ghost small" data-dfmistake="${esc(df.id)}">Count mistake · still with the guest</button>`;
     } else if (ui.dfLost === df.id) {
       acts = `<span>Give ${esc(df.item)} up as lost? It leaves the stock and goes to “Damage to decide”.</span>
         <button type="button" class="danger small" data-dflostok="${esc(df.id)}">Lost</button><button type="button" class="ghost small" data-dfcancel>Cancel</button>`;
@@ -260,6 +261,13 @@ export async function renderGear(root, d) {
       if (ds.dfret && late && extPrice(it) && !(ui.dfNoExt && ui.dfNoExt[df.id])) p.ext = { ts: await nextTs(), days: late, unit: extPrice(it) };
       await enqueue('gear_confirm', p);
       ui.notice = `${df.item}: ${ds.dfret ? 'returned by the guest' : 'found on site'}. Waiting for the gear staff to confirm.`;
+      d.render(); return;
+    }
+    if (ds.dfmistake) {
+      b.disabled = true;
+      const df = g.diffs.find(x => x.id === ds.dfmistake);
+      await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dfmistake, action: 'mistake' });
+      ui.notice = `${df ? df.item : ''}: count mistake, still out with the guest. Waiting for the gear staff to confirm.`;
       d.render(); return;
     }
     if (ds.dflate) { b.disabled = true; await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.dflate, action: 'returned', ext: { ts: await nextTs() } }); ui.notice = 'Extension charged (Unpaid).'; d.render(); return; }

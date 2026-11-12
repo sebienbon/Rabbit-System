@@ -347,6 +347,7 @@ function diffs(g) {
         ${d.gear ? `<span class="small">Anda sudah konfirmasi${d.pending ? ' (menunggu dikirim)' : ''} · menunggu resepsionis.</span>`
           : later ? `<span class="small">Belum selesai · tetap terbuka. <button type="button" class="ghost small" data-unlater="${esc(d.id)}">Ubah</button></span>`
           : `<div class="garow"><button type="button" class="primary" data-confirm="${esc(d.id)}">${d.kind === 'counted_but_out' ? 'Konfirmasi: ada di sini' : 'Ketemu'}</button>
+             ${d.kind === 'counted_but_out' ? `<button type="button" class="ghost" data-mistake="${esc(d.id)}">Salah sentuh · tidak ada di sini</button>` : ''}
              <button type="button" class="ghost" data-later="${esc(d.id)}">Belum selesai</button></div>`}
       </div>`;
     }).join('') : '<div class="notice">Tidak ada selisih.</div>'}
@@ -462,6 +463,11 @@ document.addEventListener('click', async e => {
   }
   if (ds.later) { ui.later[ds.later] = true; render(); return; }
   if (ds.unlater) { delete ui.later[ds.unlater]; render(); return; }
+  if (ds.mistake) { // touched by mistake at the check: it is still with the guest
+    b.disabled = true;
+    await enqueue('gear_confirm', { cfid: newId('F'), diff: ds.mistake, action: 'mistake' });
+    ui.notice = 'Salah sentuh dicatat. Menunggu resepsionis.'; render(); return;
+  }
   if (ds.confirm) {
     b.disabled = true;
     const d = g.diffs.find(x => x.id === ds.confirm);

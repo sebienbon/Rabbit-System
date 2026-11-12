@@ -2383,7 +2383,8 @@ var UIAPI = (function () {
       var other = df[(side === 'gear' ? 'reception' : 'gear') + 'By'];
       if (other && other === me.username) throw apiError_('bad_payload', 'Someone else must confirm the other side');
       var rows = [], charges = [], warn = [];
-      if (side === 'reception' && df.kind === 'counted_but_out') {
+      // 'mistake' (12/11): touched by mistake at the check, it is still with the guest: no return.
+      if (side === 'reception' && df.kind === 'counted_but_out' && p.action !== 'mistake') {
         var it = gearItem_(st, df.item);
         if (it.where === 'out' || it.where === 'sunset') {
           rows.push({ at: at, id: cfid + '-r', type: 'return', item: it.id, ref: it.last ? it.last.guest : '', by: me.username, d: { condition: it.condition, via: p.action } });

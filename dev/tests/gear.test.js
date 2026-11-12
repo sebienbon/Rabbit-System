@@ -430,3 +430,18 @@ test('Seb 12/11: status of a mask or bike set by hand, from the gear app or the 
   const sg = env.book['SG'].data.find(r => r[0] === 'SG001');
   assert.ok(sg.includes('Snorkel missing'), JSON.stringify(sg));
 });
+
+test('Seb 12/11: a number touched by mistake at the evening check (it is with the guest) closes as a count mistake, still out', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu'), made = login(env, 'made'); openShift(env, ayu);
+  push(env, ayu, op('gear_out', { gid: id('G'), items: ['SG001'], guest: 'Volunteer', days: 1 }));
+  push(env, made, op('gear_count', { cid: id('K'), items: [{ item: 'SG001', condition: 'OK' }] }));
+  let df = gearOf(env, ayu).diffs.find(d => d.item === 'SG001' && d.kind === 'counted_but_out');
+  assert.ok(df);
+  assert.strictEqual(push(env, made, op('gear_confirm', { cfid: id('F'), diff: df.id, action: 'mistake' })).results[0].status, 'applied');
+  assert.strictEqual(push(env, ayu, op('gear_confirm', { cfid: id('F'), diff: df.id, action: 'mistake' })).results[0].status, 'applied');
+  const g = gearOf(env, ayu);
+  assert.ok(!g.diffs.some(d => d.id === df.id), 'closed');
+  assert.strictEqual(g.items.find(i => i.id === 'SG001').where, 'out', 'still out with the guest');
+  assert.ok(!env.book['Gear_Log'].data.some(r => r[2] === 'return' && r[3] === 'SG001'), 'no return written');
+});

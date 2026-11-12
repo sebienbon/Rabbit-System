@@ -141,7 +141,7 @@ export function applyGearOps(snap, ops, side = 'reception') {
     } else if (op.type === 'gear_confirm') {
       const d = diffs.get(p.diff); if (!d) continue;
       const it = items.get(d.item);
-      if (side === 'reception' && d.kind === 'counted_but_out' && it && (it.where === 'out' || it.where === 'sunset')) ret(it, it.condition, op.at);
+      if (side === 'reception' && d.kind === 'counted_but_out' && p.action !== 'mistake' && it && (it.where === 'out' || it.where === 'sunset')) ret(it, it.condition, op.at);
       if (d.kind === 'sunset_missing' && p.action === 'found' && it && it.where === 'sunset') ret(it, it.condition, op.at);
       d[side] = true; mark(d);
       if (d.gear && d.reception) diffs.delete(d.id);
