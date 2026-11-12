@@ -715,3 +715,10 @@ h3.sub .help-pop { left: -4px; }
 .tour-menu .tour-text { margin-bottom: 12px; }
 @media (prefers-reduced-motion: reduce) { .tour-spot, .tour-card { transition: none; } }
 .tour-menu .tour-act + .tour-act { margin-top: 8px; }
+
+/* Sell: why there is no mask or bike to rent */
+.gearpick .gbrokenh { font-weight: 700; padding: 6px 10px 2px; color: var(--ink); }
+.gearpick .gbroken { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 10px; }
+.gearpick .gbroken b { min-width: 52px; }
+.gearpick .gbroken span { color: var(--coral, #c2410c); flex: 1; min-width: 120px; }
+.gearpick .gbroken button { width: auto; }

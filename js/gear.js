@@ -97,7 +97,7 @@ export async function renderGear(root, d) {
         <label class="small">Rp <input data-dmgamt="${esc(dm.id)}" inputmode="numeric" value="${f.amount ? money(f.amount) : ''}" size="8" placeholder="${price ? '' : 'price'}"></label>
         <button type="button" class="primary small" data-dmgcharge="${esc(dm.id)}">Charge guest</button>
         <button type="button" class="ghost small" data-dmgno="${esc(dm.id)}">Don’t charge</button>
-        <span class="muted small">or leave it pending</span>`
+        <span class="muted small">or leave it pending</span>${it.condition !== 'OK' ? `<button type="button" class="ghost small" data-gservice="${esc(dm.item)}">Repaired · back in stock</button>` : ''}`
         : allowed && it.condition !== 'OK' ? `<button type="button" class="ghost small" data-gservice="${esc(dm.item)}">Repaired · back in stock</button>` : ''}</div></li>`;
   };
 

@@ -247,6 +247,16 @@ function renderSell(root, d) {
     if (b.dataset.rm !== undefined) { cart.items.splice(+b.dataset.rm, 1); renderCart(); renderProds(); return; }
     if (b.dataset.pay !== undefined) { cart.payment = b.dataset.pay; renderCart(); return; }
     if (b.dataset.gearpick !== undefined) { const [i, g] = b.dataset.gearpick.split(':'); addNumber(+i, g); return; }
+    if (b.dataset.gearfix !== undefined) {
+      // The gear staff forgot to say it was repaired: back in stock (as in Gear), then into this sale.
+      const [i, g] = b.dataset.gearfix.split(':');
+      b.disabled = true;
+      await enqueue('gear_service', { sid: 'R' + Date.now().toString(36) + '-' + crypto.randomUUID().slice(0, 6), item: g });
+      d.gear = await gearView();
+      addNumber(+i, g);
+      const er = cartEl.querySelector('#saleErr'); if (er) er.textContent = `${g} marked repaired and back in stock.`;
+      return;
+    }
     if (b.dataset.gearrm !== undefined) { const [i, g] = b.dataset.gearrm.split(':'); const it = cart.items[+i]; it.gear = it.gear.filter(x => x !== g); renderCart(); return; }
     if (b.id === 'recordSale') return recordSale(b);
   });
@@ -256,8 +266,22 @@ function renderSell(root, d) {
     const n = String(q || '').trim().toUpperCase();
     const list = available(it.kind).filter(x => !n || x.id.includes(n)); // all of them; the list scrolls
     ul.innerHTML = list.length ? list.map(x => `<li><button type="button" data-gearpick="${i}:${esc(x.id)}">${esc(x.id)}</button></li>`).join('')
-      : `<li class="muted">${n ? 'No available number matches.' : 'No ' + it.kind + ' in stock.'}</li>`;
+      : n ? '<li class="muted">No available number matches.</li>' : noneInStock(it.kind, i);
     ul.hidden = false;
+  };
+  // Nothing to rent: say which ones and why (12/11: "No bike in stock" while 3 bikes were in the box,
+  // marked broken at the evening check). Already repaired? Back in stock here and picked at once.
+  const noneInStock = (kind, i) => {
+    const all = (d.gear ? d.gear.items : []).filter(x => x.kind === kind && !chosenNumbers().has(x.id));
+    const word = kind === 'bike' ? 'bike' : 'mask';
+    const broken = all.filter(x => x.where === 'in' && x.condition !== 'OK');
+    const out = all.filter(x => x.where === 'out' || x.where === 'sunset');
+    const note = id => { const dm = (d.gear.damages || []).filter(x => x.item === id && x.note).pop(); return dm ? ` “${esc(dm.note)}”` : ''; };
+    const fix = d.user.role !== 'staff' || (d.shift && d.shift.user === d.user.username);
+    return `<li class="muted">No ${word} ready to rent.</li>`
+      + (broken.length ? `<li class="gbrokenh">${broken.length} ${word}${broken.length > 1 ? 's' : ''} out of service:</li>` + broken.map(x => `<li class="gbroken"><b>${esc(x.id)}</b> <span>${esc(x.condition)}${note(x.id)}</span>${fix ? `<button type="button" class="ghost small" data-gearfix="${i}:${esc(x.id)}">Repaired · rent it</button>` : ''}</li>`).join('') : '')
+      + (out.length ? `<li class="muted small">Out now: ${out.map(x => esc(x.id) + (x.where === 'sunset' ? ' (Sunset Boat)' : x.last && x.last.guest ? ' (' + esc(x.last.guest) + ')' : '')).join(', ')}</li>` : '')
+      + (!broken.length && !out.length ? `<li class="muted small">No ${word} in the SG tab of the sheet.</li>` : '');
   };
   const addNumber = (i, g) => {
     const it = cart.items[i];
