@@ -402,7 +402,8 @@ var UIAPI = (function () {
   function pos_guests(body) {
     var caller = auth_(session_(body.token));
     if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account reads the guests');
-    return { guests: readGuests_() };
+    // owner 12/11: the BAR Cash-out rows written from the reception app count in the bar till too (the POS skips its own: `me`)
+    return { guests: readGuests_(), bar: readBarCashouts_(), me: caller.author || caller.username };
   }
   // One staff list (owner 09/11): the POS (its session, account bar-pos) reads who works here; no passwords leave.
   function pos_staff(body) {
