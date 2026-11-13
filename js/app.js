@@ -21,14 +21,22 @@ const dayTime = iso => iso ? new Date(iso).toLocaleString('en-GB', { weekday: 's
 // server and every pull brings here (sync.js → localStorage rabbitPosServer). Before that (older POS or server): the
 // address this computer was given once with ?pos=http://<address>:8080 (?pos=local forgets it), else CONFIG.POS_URL.
 const POS_KEY = 'rabbitPosUrl';
+// Owner 13/11: the reception PC is also the bar POS. On that computer the button opens "localhost" (this computer):
+// it works whatever address Windows gives the PC (.131, .161, .200…). Asked once per computer at the first press of
+// "Bar POS" (localStorage rabbitPosHere yes / no); ?pos=here says yes, ?pos=ask asks again.
+const POS_HERE = 'rabbitPosHere';
+const posHere = () => { try { return localStorage.getItem(POS_HERE); } catch { return null; } };
 let posSaved = null;
 (() => {
   const q = new URLSearchParams(location.search).get('pos');
   if (q === null) return;
-  try { if (/^https?:\/\/[\w.-]+(:\d+)?\/?$/i.test(q)) { localStorage.setItem(POS_KEY, q.replace(/\/$/, '')); posSaved = q; } else localStorage.removeItem(POS_KEY); } catch { /* private mode */ }
+  try {
+    if (q === 'here' || q === 'ask') { q === 'here' ? localStorage.setItem(POS_HERE, 'yes') : localStorage.removeItem(POS_HERE); }
+    else if (/^https?:\/\/[\w.-]+(:\d+)?\/?$/i.test(q)) { localStorage.setItem(POS_KEY, q.replace(/\/$/, '')); posSaved = q; } else localStorage.removeItem(POS_KEY);
+  } catch { /* private mode */ }
   history.replaceState(null, '', location.pathname + location.hash);
 })();
-const posUrl = () => { try { return localStorage.getItem('rabbitPosServer') || localStorage.getItem(POS_KEY) || CONFIG.POS_URL; } catch { return CONFIG.POS_URL; } };
+const posUrl = () => { if (posHere() === 'yes') return 'http://localhost:8080'; try { return localStorage.getItem('rabbitPosServer') || localStorage.getItem(POS_KEY) || CONFIG.POS_URL; } catch { return CONFIG.POS_URL; } };
 
 const ui = { user: null, pickedUser: null, typedUser: false, closing: null, notice: null, busy: false, tab: 'sell' };
 const main = () => $('#main');
@@ -414,6 +422,10 @@ async function renderNow() {
   $('#who [data-help]').onclick = e => openGuide(e.currentTarget);
   // One login (owner 09/11): a one-time pass from the sheet, valid 2 minutes, opens the POS as this user.
   if ($('#posBtn')) $('#posBtn').onclick = async () => {
+    if (!posHere()) {
+      const yes = confirm('Is the bar POS running on THIS computer?\n\nOK = yes (it opens on this computer, whatever its address)\nCancel = no (it opens the address set in the POS: ' + (localStorage.getItem('rabbitPosServer') || localStorage.getItem(POS_KEY) || CONFIG.POS_URL) + ')');
+      try { localStorage.setItem(POS_HERE, yes ? 'yes' : 'no'); } catch { /* private mode */ }
+    }
     const w = window.open('', 'rabbitpos'); // its own window (tab), opened now inside the click so it is not blocked
     if (!w) { ui.notice = 'The browser blocked the new window: allow pop-ups for this site, then press Bar POS again.'; render(); return; }
     try {
