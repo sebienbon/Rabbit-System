@@ -257,6 +257,7 @@ h3.cat::before { content: ''; width: 10px; height: 10px; border-radius: 4px; bac
 .badge { display: inline-block; padding: 1px 9px; border-radius: 99px; font-size: .8rem; font-weight: 800; background: var(--accent-bg); border: 1px solid var(--line); color: var(--ink-soft); }
 .badge.unpaid { background: var(--warn-bg); border-color: transparent; color: var(--warn); }
 .badge.wait { background: #DCEFFF; border-color: transparent; color: var(--accent); }
+.badge.noshow { background: #2B2B2B; border-color: transparent; color: #fff; }
 .inline { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; margin-top: 10px; padding: 14px; background: var(--accent-bg); border-radius: var(--radius-sm); }
 .inline label { display: grid; gap: 4px; font-weight: 700; font-size: .9rem; }
 .inline label.grow { flex: 1 1 220px; }

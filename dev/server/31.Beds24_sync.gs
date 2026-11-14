@@ -16,6 +16,8 @@
  *      lines) becomes one Room row "Unpaid".
  *   4. Booking cancelled: its Unpaid rows become "Cancelled" (amount 0). Paid rows are never
  *      touched: they are reported in B24_Control.
+ *   Status "Black" in Beds24 (no-show): the booking's room rows start with "No-show (Black in Beds24)";
+ *   the amount stays due (the guest bill shows a No-show badge).
  *   Price lowered in Beds24 after that: the Unpaid row of the booking is lowered too (paid rows never).
  *   Differences (amount changed in Beds24, overpaid booking…) go to B24_Control.
  *
@@ -180,6 +182,9 @@ var B24 = (function () {
   function fakeUnpaids_(b) { return (b.invoice || []).filter(function (i) { return Number(i.type) >= 200 && fakeUnpaid_(i); }); }
   function payAmount_(i) { return round_(-num_(i.qty) * num_(i.price)); }
   function cancelled_(b) { return String(b.status) === '0'; }
+  /** Status "Black" in Beds24 = the guest did not come (no-show). The amount stays due. */
+  var NOSHOW = 'No-show (Black in Beds24)';
+  function noShow_(b) { return String(b.status) === '4'; }
 
   // ---------- Beds24 (JSON API, same keys as fetchBeds24Data) ----------
   function call_(fn, body) {
@@ -220,7 +225,7 @@ var B24 = (function () {
       var ts = String(r[E.ts]);
       if (!/^\d{17}$/.test(ts)) return;
       lines.push({ rowNo: i + 2, ts: ts, type: String(r[E.type]), sub: String(r[E.sub]), obj: String(r[E.obj]),
-        guest: String(r[E.guest]), pay: String(r[E.pay]), amount: num_(r[E.real] !== '' ? r[E.real] : r[E.total]),
+        guest: String(r[E.guest]), pay: String(r[E.pay]), comment: String(r[E.comment]), amount: num_(r[E.real] !== '' ? r[E.real] : r[E.total]),
         bookId: String(r[COL_U - 1]).trim(), lineId: String(r[COL_V - 1]).trim() });
     });
     var dataLast = 1;
@@ -239,7 +244,7 @@ var B24 = (function () {
     var live = live_(), plan = [], issues = [];
     var today = Utilities.parseDate(ymd_(new Date()), TS_TZ, 'yyyy-MM-dd'), todayStr = ymd_(new Date());
     var all = readBookings_(today), books = {}, start = start_();
-    var inHouse = all.filter(function (b) { return !cancelled_(b) && String(b.firstNight) <= todayStr && String(b.lastNight) >= todayStr; });
+    var inHouse = all.filter(function (b) { return !cancelled_(b) && !noShow_(b) && String(b.firstNight) <= todayStr && String(b.lastNight) >= todayStr; });
     all.forEach(function (b) {
       var id = String(b.bookId), first = String(b.firstNight);
       if (first < start) return;                       // before the start date: handled the old way
@@ -299,6 +304,16 @@ var B24 = (function () {
         return;
       }
 
+      // No-show: the booking's room rows say so (and stop saying so if the status goes back).
+      mine.forEach(function (l) {
+        var has = l.comment.indexOf(NOSHOW) === 0, want = noShow_(b) && l.pay !== PAY_CANCELLED;
+        if (has === want) return;
+        var c = want ? (NOSHOW + (l.comment ? ' · ' + l.comment : '')) : l.comment.slice(NOSHOW.length).replace(/^ · /, '');
+        act(want ? 'Mark no-show' : 'Remove no-show', b, guest + ' (row ' + l.rowNo + ')');
+        if (live) ent.sheet.getRange(l.rowNo, E.comment + 1).setValue(safe_(c.slice(0, 300)));
+        l.comment = c;
+      });
+
       // 2. Beds24 → Entries, and checks on lines sent from the reception
       payments_(b).forEach(function (i) {
         var lineId = String(i.invoiceId), amount = payAmount_(i), m = String(i.description || '').match(TAG);
@@ -345,7 +360,7 @@ var B24 = (function () {
             if (live) {
               ent.sheet.getRange(l.rowNo, E.real + 1).setValue(to);
               if (to <= 0.5) ent.sheet.getRange(l.rowNo, E.pay + 1).setValue(PAY_CANCELLED);
-              ent.sheet.getRange(l.rowNo, E.comment + 1).setValue('From Beds24: still to pay (price changed in Beds24, was ' + l.amount + ')');
+              ent.sheet.getRange(l.rowNo, E.comment + 1).setValue((l.comment.indexOf(NOSHOW) === 0 ? NOSHOW + ' · ' : '') + 'From Beds24: still to pay (price changed in Beds24, was ' + l.amount + ')');
             }
             l.amount = to;
           });
@@ -357,7 +372,7 @@ var B24 = (function () {
         newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: transferMode_(), author: bookingAuthor_(b), date: new Date(), comment: 'Paid to ' + channel });
       } else if (due > 0.5) {
         act('Create Unpaid line', b, guest + ' · ' + room + ' · ' + due + (b._linked ? ' (extension)' : ''));
-        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: PAY_UNPAID, author: bookingAuthor_(b), date: new Date(), comment: 'From Beds24: still to pay' + (b._linked ? ' (extension, booking ' + id + ')' : '') });
+        newRows.push({ bookId: id, lineId: '', guest: guest, room: room, amount: due, pay: PAY_UNPAID, author: bookingAuthor_(b), date: new Date(), comment: (noShow_(b) ? NOSHOW + ' · ' : '') + 'From Beds24: still to pay' + (b._linked ? ' (extension, booking ' + id + ')' : '') });
       } else if (due < -0.5) {
         issues.push([id, guest, 'More paid than charged', String(-due)]);
       }

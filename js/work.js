@@ -54,10 +54,15 @@ async function load(ctx) {
   for (const l of lines) if (l.type === 'Income' && l.payment === 'Unpaid') {
     const u = unpaid.get(l.guest) || { guest: l.guest, total: 0, count: 0, oldest: l.ts };
     u.total += l.total || 0; u.count++; if (l.ts < u.oldest) u.oldest = l.ts;
+    if (isNoShow(l)) u.noShow = true;
     unpaid.set(l.guest, u);
   }
   return { lines, catalog: catalog || [], payments: payments || ['Cash', 'Unpaid'], guests: [...names.values()], unpaid, gear, features: features || [], ...ctx };
 }
+
+/** Beds24 status "Black" = the guest did not come: the sync starts the room line's comment with this. */
+export const isNoShow = l => /^No-show\b/i.test(String(l.comment || ''));
+const NOSHOW_BADGE = '<span class="badge noshow" title="Status Black in Beds24: the guest did not come">No-show</span>';
 
 // ---------------------------------------------------------------- tabs
 export async function workTabs(ctx) {
@@ -571,12 +576,12 @@ function billList(d) {
       const hits = d.guests.filter(g => norm(g).includes(q)).sort((a, b) => a.localeCompare(b)).slice(0, 30);
       body = hits.length ? `<ul class="glist">${hits.map(g => {
         const u = d.unpaid.get(g);
-        return `<li><button type="button" data-open="${esc(g)}"><span>${esc(g)}</span>${u ? `<span class="owes">owes Rp ${money(u.total)}</span>` : ''}</button></li>`;
+        return `<li><button type="button" data-open="${esc(g)}"><span>${esc(g)}${u && u.noShow ? ' ' + NOSHOW_BADGE : ''}</span>${u ? `<span class="owes">owes Rp ${money(u.total)}</span>` : ''}</button></li>`;
       }).join('')}</ul>` : '<p class="muted">No guest with that name.</p>';
     } else {
       const list = [...d.unpaid.values()].sort((a, b) => (a.oldest < b.oldest ? -1 : 1));
       body = list.length ? `<h3 class="sub">Open bills</h3><ul class="glist">${list.map(u => `<li><button type="button" data-open="${esc(u.guest)}">
-          <span>${esc(u.guest)}<small>${u.count} item${u.count > 1 ? 's' : ''} since ${lineDay(u.oldest)}</small></span><span class="owes">Rp ${money(u.total)}</span></button></li>`).join('')}</ul>`
+          <span>${esc(u.guest)}${u.noShow ? ' ' + NOSHOW_BADGE : ''}<small>${u.count} item${u.count > 1 ? 's' : ''} since ${lineDay(u.oldest)}</small></span><span class="owes">Rp ${money(u.total)}</span></button></li>`).join('')}</ul>`
         : '<p class="muted">No open bills. Every sale is paid.</p>';
     }
     return body;
@@ -598,7 +603,7 @@ function renderBill(root, d, guest) {
     ${unpaid.length && cashRight(d.user, d.shift) ? `<form id="payForm">
       <h3 class="sub">To pay ${helpTip('How to record a payment', PAY_RULES)}</h3>
       <ul class="lines">${unpaid.map(l => `<li class="line sel"><label class="check"><input type="checkbox" data-sel="${esc(l.ts)}"${ui.billSel.has(l.ts) ? ' checked' : ''}>
-        <span class="what"><b>${esc(l.object.replace(/^-/, ''))}</b>${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${lineDay(l.ts)} ${lineTime(l.ts)}</span></span></label>
+        <span class="what"><b>${esc(l.object.replace(/^-/, ''))}</b>${isNoShow(l) ? ' ' + NOSHOW_BADGE : ''}${l.qty && l.qty !== 1 ? ` ×${esc(l.qty)}` : ''}<span class="who">${lineDay(l.ts)} ${lineTime(l.ts)}</span></span></label>
         <span style="grid-area: tags; display: flex; gap: 10px; align-items: center">${l.pending ? '<span class="badge wait">Waiting</span>' : ''}<button type="button" class="link" data-lsplit="${esc(l.ts)}" title="Two people pay this line, each their way">Split</button></span>
         <span class="amt num">${money(l.total)}</span></li>`).join('')}</ul>
       <div class="ctotal"><span>Selected</span><b class="num" id="selTotal">Rp ${money(selTotal())}</b></div>

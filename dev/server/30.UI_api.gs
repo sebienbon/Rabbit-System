@@ -1716,6 +1716,9 @@ var UIAPI = (function () {
         man.sheet.getRange(n, M.realCost + 1).setValue(oldRow[E.realCost]);
       });
       appendEntries_(ent, [newRow], true);
+      // A room line from Beds24 keeps its booking id (U): the sync counts both halves and sends each payment.
+      var bookId = String(ent.sheet.getRange(rowNo, 21).getValue() || '').trim();
+      if (bookId) ent.sheet.getRange(ent.last, 21).setNumberFormat('@').setValue(bookId);
       appendManual_(man, [newRow]);
       return { audit: { before: before } };
     },

@@ -815,3 +815,15 @@ test('line_split (owner 12/11): one unpaid line in two unpaid lines, then each p
   r = push(env, ayu, op('settle', { payment: 'Cash', items: [{ oldTs: OLD, newTs: newTs() }] }), op('settle', { payment: 'Credit / Debit Card', items: [{ oldTs: nl[14], newTs: newTs() }] }));
   assert.deepStrictEqual(entriesRows(env).filter(x => x[12] === 'Old Guest').map(x => x[13]).sort(), ['Cash', 'Credit / Debit Card']);
 });
+
+test('line_split of a Beds24 room line: the new line keeps the booking id (U), so the sync sees both halves', () => {
+  const env = freshEnv();
+  const ayu = login(env, 'ayu');
+  openShift(env, ayu);
+  const rowOld = entriesRows(env).findIndex(x => String(x[14]) === OLD);
+  env.book['Entries'].data[rowOld + 1][20] = '96026082';
+  const r = push(env, ayu, op('line_split', { ts: OLD, newTs: newTs(), amount: 30000 }));
+  assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
+  const lines = env.book['Entries'].data.filter(x => x[12] === 'Old Guest');
+  assert.deepStrictEqual(lines.map(x => String(x[20] || '')), ['96026082', '96026082']);
+});
