@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>The Rabbit Tree · Menu</title>
+  <meta name="theme-color" content="#7B3FC9">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <style>
+    @font-face { font-family: 'Nunito'; src: url(fonts/nunito-latin-400-normal.woff2) format('woff2'); font-weight: 400; font-display: swap; }
+    @font-face { font-family: 'Nunito'; src: url(fonts/nunito-latin-800-normal.woff2) format('woff2'); font-weight: 800; font-display: swap; }
+    @font-face { font-family: 'Baloo 2'; src: url(fonts/baloo-2-latin-800-normal.woff2) format('woff2'); font-weight: 800; font-display: swap; }
+    :root {
+      --accent: #7B3FC9; --accent-bg: #F3EDFC; --ink: #33305C; --soft: #6B6796; --bg: #FFF7ED; --paper: #fff;
+      --line: #E7DEF4; --ok: #0B6B61; --ok-bg: #D3F6F1; --warn: #8A3B00; --warn-bg: #FFE8D6; --bad: #B3243C; --bad-bg: #FFE0E5;
+      --go: linear-gradient(110deg, #087A6E, #137FA3);
+      --sans: 'Nunito', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      --display: 'Baloo 2', 'Nunito', system-ui, -apple-system, 'PingFang SC', sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 400 17px/1.45 var(--sans); }
+    header { background: linear-gradient(110deg, #7B3FC9 0%, #B8338A 52%, #C2520F 100%); color: #fff; padding: 14px 16px; display: flex; align-items: center; gap: 10px; }
+    header img.mark { height: 30px; width: auto; }
+    header .name { height: 22px; width: auto; }
+    header select { margin-left: auto; font: inherit; font-size: 15px; border: 1px solid rgba(255,255,255,.6); background: rgba(255,255,255,.15); color: #fff; border-radius: 10px; padding: 6px 8px; }
+    header select option { color: var(--ink); }
+    main { max-width: 520px; margin: 0 auto; padding: 16px 16px 40px; }
+    h1 { font: 800 1.6rem/1.15 var(--display); margin: 8px 0 4px; }
+    h2 { font: 800 1.15rem/1.2 var(--display); margin: 0 0 10px; }
+    p { margin: 6px 0; }
+    .muted { color: var(--soft); }
+    .card { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; padding: 16px; margin: 14px 0; box-shadow: 0 8px 24px rgba(51,48,92,.06); }
+    .stay { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: .95rem; }
+    .stay dt { color: var(--soft); } .stay dd { margin: 0; font-weight: 800; }
+    .choice { display: flex; gap: 10px; align-items: center; padding: 12px; border: 2px solid var(--line); border-radius: 14px; margin: 8px 0; cursor: pointer; }
+    .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); }
+    .choice input { width: 22px; height: 22px; accent-color: var(--accent); margin: 0; }
+    input[type=text] { width: 100%; font: inherit; font-size: 18px; padding: 12px; border: 2px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); }
+    input[type=text]:focus { outline: none; border-color: var(--accent); }
+    input.check { border-color: #19C3B1; background: #F2FDFB; }
+    label.field { display: block; margin-top: 12px; font-weight: 800; font-size: .95rem; }
+    label.field input { margin-top: 6px; letter-spacing: .06em; text-transform: uppercase; }
+    .btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; border: 0; border-radius: 16px; padding: 15px 18px; font: 800 1.05rem var(--sans); cursor: pointer; }
+    .btn.go { background: var(--go); color: #fff; box-shadow: 0 8px 20px rgba(25,195,177,.28); }
+    .btn.soft { background: var(--accent-bg); color: var(--accent); border: 2px solid var(--line); }
+    .btn:disabled { opacity: .55; }
+    .shot { margin-top: 12px; position: relative; }
+    .shot img { width: 100%; border-radius: 12px; display: block; border: 1px solid var(--line); }
+    .note { border-radius: 12px; padding: 10px 12px; margin-top: 10px; font-size: .95rem; }
+    .note.ok { background: var(--ok-bg); color: var(--ok); } .note.warn { background: var(--warn-bg); color: var(--warn); } .note.bad { background: var(--bad-bg); color: var(--bad); }
+    .note.busy { background: var(--accent-bg); color: var(--accent); }
+    .big { text-align: center; padding: 26px 16px; }
+    .big .icon { font-size: 56px; line-height: 1; }
+    .saved { font-size: .85rem; color: var(--soft); text-align: right; min-height: 1.2em; margin-top: 6px; }
+    .net { position: sticky; top: 0; z-index: 2; background: var(--warn-bg); color: var(--warn); text-align: center; font-size: .9rem; padding: 6px; }
+    [hidden] { display: none !important; }
+    .spin { width: 18px; height: 18px; border: 3px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: s .8s linear infinite; vertical-align: -3px; }
+    @keyframes s { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+  </style>
+</head>
+<body>
+  <header>
+    <img class="mark" src="img/logo-mark-white.png" alt="" width="18" height="30">
+    <img class="name" src="img/logo-name-white.png" alt="The Rabbit Tree" width="110" height="22">
+    <select id="lang" aria-label="Language">
+      <option value="en">English</option><option value="id">Bahasa Indonesia</option><option value="fr">Français</option>
+      <option value="es">Español</option><option value="zh">中文</option>
+    </select>
+  </header>
+  <div id="net" class="net" hidden></div>
+  <main id="main"><p class="muted">…</p></main>
+  <noscript>This page needs JavaScript.</noscript>
+  <script type="module" src="js/menu.js"></script>
+</body>
+</html>

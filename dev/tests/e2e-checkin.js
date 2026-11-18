@@ -121,6 +121,20 @@ const ymd = ms => new Date(ms + 8 * 3600000).toISOString().slice(0, 10);
     const key = await p1.evaluate(() => localStorage.getItem('rt_device_key'));
     assert.strictEqual(srv.env.call({ action: 'ci_whoami', key }).guest, 'Giulia Varcasia');
     step('the phone key identifies Giulia (for the menu)');
+    // the table QR: menu.html gets a pass and sends the phone to the POS (here a fake POS address)
+    srv.env.book['UI_Users'].appendRow(['bar-pos', 'Bar POS', 'manager', 'pos@x', 'pos123', '', '', '']);
+    const posTok = srv.env.call({ action: 'login', username: 'bar-pos', password: 'pos123', deviceId: 'pos' }).token;
+    srv.env.call({ action: 'pos_address', token: posTok, url: `http://127.0.0.1:${srv.port}` });
+    await p1.goto(base + 'menu.html?t=5');
+    await p1.waitForURL(/127\.0\.0\.1:\d+\/guest\?/, { timeout: 15000, waitUntil: "commit" });
+    const u = new URL(p1.url());
+    assert.strictEqual(u.searchParams.get('table'), '5');
+    const v = srv.env.call({ action: 'ci_menu_verify', token: posTok, pass: u.searchParams.get('pass') });
+    assert.deepStrictEqual([v.guest, v.table], ['Giulia Varcasia', '5']);
+    step('table QR → menu.html → POS /guest with a one-time pass the POS can check');
+    await p0.goto(base + 'menu.html?t=2');
+    await p0.waitForSelector('text=Your phone is not registered yet');
+    step('a phone that never checked in is sent to the reception');
     // the QR page
     const q = await desk.context().newPage();
     await q.goto(base + 'checkin-qr.html');

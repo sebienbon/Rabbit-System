@@ -13,8 +13,10 @@
  *   {action:"ci_set", key, sid, who, name, passport, lang}
  *   {action:"ci_photo", key, sid, data}        → JPEG as base64 (the page shrinks it to ~1000 px first)
  *   {action:"ci_whoami", key}                   → the checked-in guest of this phone (for the menu)
+ *   {action:"ci_menu_pass", key, table}         → one-time pass + POS address (table QR → menu.html → POS)
  * Desk (a reception session token):
  *   ci_arrivals, ci_open, ci_status, ci_photo_get, ci_edit, ci_remove, ci_validate, ci_cancel
+ * Bar POS (its session, account bar-pos): ci_menu_verify {token, pass} → {guest, room, departure, table, device}
  *
  * Kept: the passport photo 60 days after departure (Drive folder of the owner), the passport
  * number 12 months after departure (sheet CI_Guests). CI_cleanup (daily trigger) deletes them.
@@ -187,6 +189,31 @@ var CHECKIN = (function () {
     return { guest: String(r[C.name]), room: String(r[C.room]), departure: cellYmd_(r[C.dep]) };
   }
 
+  // ---------- the menu of the bar POS (owner 18/11) ----------
+  // The table QR opens menu.html on sebienbon.github.io (the only site that can read the phone key). It asks a pass
+  // here and sends the phone to the POS on the hostel Wi-Fi: <UI_POS_URL>/guest?pass=…&table=…. The POS checks the
+  // pass with its own session (ci_menu_verify) and learns the guest. A pass works once, within 2 minutes.
+  var PASS_MS = 120000;
+  function menuPass(body) {
+    var guest = whoami(body), hash = keyHash_(body.key), now = Date.now(), p = props_();
+    var all = p.getProperties();
+    Object.keys(all).forEach(function (k) { if (k.indexOf('CI_P_') === 0) { try { if (JSON.parse(all[k]).exp < now) p.deleteProperty(k); } catch (e) { p.deleteProperty(k); } } });
+    var code = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+    var table = text_(body.table, 20);
+    p.setProperty('CI_P_' + code, JSON.stringify({ g: guest.guest, r: guest.room, d: guest.departure, t: table, dev: hash.slice(0, 16), exp: now + PASS_MS }));
+    return { pass: code, validMs: PASS_MS, guest: guest.guest, table: table, posUrl: p.getProperty('UI_POS_URL') || '' };
+  }
+  function menuVerify(body, ui) {
+    var u = ui.user(body.token);
+    if (u.role !== 'manager' && u.role !== 'admin') throw err_('forbidden', 'Only the POS account checks a menu pass');
+    var key = 'CI_P_' + String(body.pass || '').replace(/[^a-z0-9]/gi, '').slice(0, 80), p = props_();
+    var raw = p.getProperty(key);
+    if (raw) p.deleteProperty(key); // once
+    var x = raw ? JSON.parse(raw) : null;
+    if (!x || x.exp < Date.now()) { Utilities.sleep(500); throw err_('bad_pass', 'This link expired: scan the QR code on the table again'); }
+    return { guest: x.g, room: x.r, departure: x.d, table: x.t, device: x.dev };
+  }
+
   // ---------- desk side ----------
   function deskUser_(body, ui) {
     var u = ui.user(body.token);
@@ -354,9 +381,9 @@ var CHECKIN = (function () {
     return 'CI_Guests ready, photo folder ' + props_().getProperty('CI_FOLDER') + (has ? ', trigger already there' : ', daily trigger installed');
   }
 
-  var GUEST = { ci_hello: hello, ci_set: set, ci_photo: photo, ci_whoami: whoami };
+  var GUEST = { ci_hello: hello, ci_set: set, ci_photo: photo, ci_whoami: whoami, ci_menu_pass: menuPass };
   var DESK = { ci_arrivals: arrivals, ci_open: open, ci_status: status, ci_photo_get: photoGet, ci_remove: remove,
-    ci_validate: validate, ci_cancel: cancel, ci_edit: edit };
+    ci_validate: validate, ci_cancel: cancel, ci_edit: edit, ci_menu_verify: menuVerify };
   /** ui = {user(token) → the logged-in reception user} given by UIAPI. */
   function handle(body, ui) {
     var a = String(body.action);

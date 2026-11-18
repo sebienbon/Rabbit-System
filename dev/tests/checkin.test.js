@@ -189,3 +189,33 @@ test('bad photo data is refused before anything is written', () => {
   assert.strictEqual(env.call({ action: 'ci_photo', key: key('a'), sid, data: 'A'.repeat(1600000) }).error, 'bad_photo');
   assert.strictEqual(Object.keys(env.drive.files).length, 0);
 });
+
+test('menu pass: a checked-in phone gets a one-time pass, the POS account checks it once', () => {
+  const env = env0();
+  const ayu = login(env, 'ayu');
+  env.book['UI_Users'].appendRow(['bar-pos', 'Bar POS', 'manager', 'pos@x', 'pw', '', '', '']);
+  const pos = login(env, 'bar-pos');
+  env.call({ action: 'pos_address', token: pos, url: 'http://192.168.1.131:8080' });
+  // unknown phone: no pass
+  assert.strictEqual(env.call({ action: 'ci_menu_pass', key: key('a'), table: '5' }).error, 'unknown_device');
+  const sid = openFor(env, ayu);
+  env.call({ action: 'ci_hello', key: key('a') });
+  env.call({ action: 'ci_set', key: key('a'), sid, passport: 'AB1' });
+  env.call({ action: 'ci_photo', key: key('a'), sid, data: JPEG });
+  env.call({ action: 'ci_validate', token: ayu, sid });
+  const p = env.call({ action: 'ci_menu_pass', key: key('a'), table: '5' });
+  assert.ok(p.ok, JSON.stringify(p));
+  assert.deepStrictEqual([p.guest, p.table, p.posUrl, p.validMs], ['Giulia Varcasia', '5', 'http://192.168.1.131:8080', 120000]);
+  // a staff account may not check passes; the POS account can, once
+  assert.strictEqual(env.call({ action: 'ci_menu_verify', token: ayu, pass: p.pass }).error, 'forbidden');
+  const v = env.call({ action: 'ci_menu_verify', token: pos, pass: p.pass });
+  assert.deepStrictEqual([v.guest, v.room, v.table, v.device.length], ['Giulia Varcasia', 'Twin Room', '5', 16]);
+  assert.strictEqual(env.call({ action: 'ci_menu_verify', token: pos, pass: p.pass }).error, 'bad_pass');
+  // the same phone always gives the same device id; an expired pass is refused
+  const p2 = env.call({ action: 'ci_menu_pass', key: key('a'), table: '' });
+  const k = Object.keys(env.props).find(x => x === 'CI_P_' + p2.pass);
+  const x = JSON.parse(env.props[k]); x.exp = Date.now() - 1; env.props[k] = JSON.stringify(x);
+  assert.strictEqual(env.call({ action: 'ci_menu_verify', token: pos, pass: p2.pass }).error, 'bad_pass');
+  const p3 = env.call({ action: 'ci_menu_pass', key: key('a') });
+  assert.strictEqual(env.call({ action: 'ci_menu_verify', token: pos, pass: p3.pass }).device, v.device);
+});

@@ -73,6 +73,7 @@ function start(port = 0) {
       });
       return;
     }
+    if (url.pathname === '/guest') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<h1>Fake bar POS guest menu</h1>'); return; } // e2e-checkin
     if (url.pathname === '/js/config.js') {
       res.writeHead(200, { 'Content-Type': 'text/javascript' });
       res.end(`export const CONFIG = { API_URL: '/api', PUSH_EVERY_MS: 1500, PULL_EVERY_MS: 4000 };`);
