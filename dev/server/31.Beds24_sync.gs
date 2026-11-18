@@ -474,7 +474,16 @@ var B24 = (function () {
     return r;
   }
 
-  return { run: run, setup: setup };
+  /** Bookings arriving between two days (yyyy-MM-dd), for the Check-in tab: not cancelled, newest arrival last. */
+  function arrivals(from, to) {
+    var list = call_('getBookings', { arrivalFrom: compact_(from), arrivalTo: compact_(to), includeInvoice: true });
+    return (Array.isArray(list) ? list : []).filter(function (b) { return !cancelled_(b); }).map(function (b) {
+      return { bookId: String(b.bookId), name: guestName0_(b), room: roomName_(b), arrival: String(b.firstNight),
+        departure: ymd_(addDays_(Utilities.parseDate(String(b.lastNight), TS_TZ, 'yyyy-MM-dd'), 1)),
+        guests: (Number(b.numAdult) || 0) + (Number(b.numChild) || 0) || 1, noShow: noShow_(b), channel: channel_(b) || '' };
+    }).sort(function (a, b) { return a.arrival < b.arrival ? -1 : a.arrival > b.arrival ? 1 : a.name < b.name ? -1 : 1; });
+  }
+  return { run: run, setup: setup, arrivals: arrivals };
 })();
 
 function B24_run() { return B24.run(); }

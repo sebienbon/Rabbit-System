@@ -7,10 +7,11 @@ import { currentShift, cashInBoxBeforeOpening, expectedCash, cashMovements, open
 import { renderWork, workTabs, cartBusy as saleBusy, expenseBusy, cashBusy, partnerBusy, cardBusy } from './work.js';
 import { barBusy } from './bar.js'; // TEMPORARY (bar cash-out)
 import { gearBusy, gearAlerts } from './gear.js';
+import { checkinBusy } from './checkindesk.js';
 import { gearView, checkDue, notifyOnce } from './gearcore.js';
 import { helpMenu, tourRunning } from './tour.js';
 import { startDeskTour, deskScreenName } from './tourdesk.js';
-const cartBusy = ui => tourRunning() || saleBusy(ui) || expenseBusy(ui) || cashBusy(ui) || partnerBusy(ui) || cardBusy(ui) || barBusy(ui) || gearBusy(ui);
+const cartBusy = ui => tourRunning() || saleBusy(ui) || expenseBusy(ui) || cashBusy(ui) || partnerBusy(ui) || cardBusy(ui) || barBusy(ui) || gearBusy(ui) || checkinBusy(ui);
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -222,7 +223,7 @@ async function renderShift() {
   const wt = await workTabs({ ui, user: ui.user, shift });
   const gear = await gearView();
   const ga = gearAlerts(gear);
-  const tabs = [['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['partners', 'Partners', wt.counts.partners], ['card', 'Card'], ['bar', 'Bar cash-out'], /* TEMPORARY (bar cash-out) */ ['gear', 'Gear', ga.diffs + ga.late], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
+  const tabs = [['sell', 'Sell'], ['checkin', 'Check-in'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['partners', 'Partners', wt.counts.partners], ['card', 'Card'], ['bar', 'Bar cash-out'], /* TEMPORARY (bar cash-out) */ ['gear', 'Gear', ga.diffs + ga.late], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
   html += `<section class="card shift">
     <div class="shifthead">
       <h2>${mine ? 'Your shift' : `${esc(shift.userName && shift.userName !== shift.user ? shift.userName : nameOf(shift.user))}'s shift`}</h2>

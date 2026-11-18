@@ -2764,6 +2764,10 @@ var UIAPI = (function () {
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
       var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, pos_lines: pos_lines, pos_address: pos_address, pos_guests: pos_guests }[body.action];
+      // Check-in on the guest's phone (32.Checkin.gs): guest calls carry a device key, desk calls a session token.
+      if (!fn && /^ci_/.test(String(body.action)) && typeof CHECKIN !== 'undefined') {
+        fn = function (b) { return CHECKIN.handle(b, { user: function (t) { return publicUser_(auth_(session_(t))); } }); };
+      }
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;

@@ -81,6 +81,7 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
   const attach = sh => { sh.fmt = fmt; sh.tz = tz; return sh; };
   Object.values(book).forEach(attach);
   const props = {};
+  const drive = { files: {}, folders: {} };
   const mails = [];
   const mailFail = { next: false };
   const triggers = [];
@@ -103,6 +104,7 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       computeDigest: (alg, s) => Array.from(crypto.createHash(alg).update(s, 'utf8').digest()).map(b => (b > 127 ? b - 256 : b)),
       getUuid: () => crypto.randomUUID(), sleep() {}, formatDate: fmt,
+      base64Decode: s => Array.from(Buffer.from(s, 'base64')), base64Encode: b => Buffer.from(b.map(x => x & 0xff)).toString('base64'),
       newBlob: (data, type, name) => ({ data, type, name, getAs(t) { return { data, type: t, name, setName(n) { this.name = n; return this; } }; } }),
       // Only 'yyyy-MM-dd' is needed: midnight of that day in timezone _tz.
       parseDate: (s, _tz, pattern) => {
@@ -134,12 +136,26 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
       newTrigger: fn => { const t = { fn }; const b = { timeBased: () => b, atHour: h => (t.hour = h, b), nearMinute: m => (t.minute = m, b),
         everyDays: d => (t.every = d, b), inTimezone: z => (t.tz = z, b), create: () => { triggers.push(t); return t; } }; return b; },
     },
+    // Drive: a folder of files kept in memory (check-in passport photos).
+    DriveApp: (() => {
+      const files = drive.files; let n = 0;
+      const file = id => { const f = files[id]; if (!f) throw new Error('No item with the given ID'); return f; };
+      const api = f => ({ getId: () => f.id, setTrashed(t) { f.trashed = !!t; return this; }, getBlob: () => ({ getBytes: () => f.bytes }) });
+      return {
+        createFolder: name => { const id = 'folder' + (++n); drive.folders[id] = name; return { getId: () => id,
+          createFile: blob => { const fid = 'file' + (++n); files[fid] = { id: fid, name: blob.name, bytes: blob.data, folder: id, trashed: false }; return api(files[fid]); } }; },
+        getFolderById: id => { if (!drive.folders[id]) throw new Error('No folder'); return { getId: () => id,
+          createFile: blob => { const fid = 'file' + (++n); files[fid] = { id: fid, name: blob.name, bytes: blob.data, folder: id, trashed: false }; return api(files[fid]); } }; },
+        getFileById: id => api(file(id)),
+      };
+    })(),
     MailApp: { sendEmail(m) { if (mailFail.next) { mailFail.next = false; throw new Error('Mail service failed (simulated)'); } mails.push(m); } },
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(__dirname + '/../server/30.UI_api.gs', 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(__dirname + '/../server/32.Checkin.gs', 'utf8'), ctx);
   const call = body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text);
-  return { ctx, book, props, call, mails, mailFail, triggers };
+  return { ctx, book, props, call, mails, mailFail, triggers, drive };
 }
 
 module.exports = { makeEnv };

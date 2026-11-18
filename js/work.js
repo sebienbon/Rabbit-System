@@ -6,6 +6,7 @@ import { renderBar } from './bar.js'; // TEMPORARY (bar cash-out)
 import { gearView, backBefore, fmtWhen, sameName } from './gearcore.js';
 import { renderGear } from './gear.js';
 import { renderCommissions, renderActivities, catalogWithPending, hasFeature } from './sellextra.js';
+import { renderCheckin } from './checkindesk.js';
 
 // The work area while a shift is open: Sell, Guest bills, This shift.
 // Everything is written locally first (instant, works offline), then sent.
@@ -94,6 +95,7 @@ export async function renderWork(root, ctx) {
   else if (tab === 'card') await renderCard(root, d);
   else if (tab === 'bar') await renderBar(root, d); // TEMPORARY (bar cash-out)
   else if (tab === 'gear') await renderGear(root, d);
+  else if (tab === 'checkin') await renderCheckin(root, d);
 }
 
 // ---------------------------------------------------------------- sell

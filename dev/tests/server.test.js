@@ -55,10 +55,15 @@ test('pull requires a session and returns catalog, guests, users, shift', () => 
   assert.strictEqual(p.shift.lastCashInBox, 1387750);
 });
 
+// Ops older than 14 days are refused (clock reset guard): these tests use a fixed time of day, 3 days ago.
+const D0 = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+const D1 = new Date(Date.parse(D0) + 86400000).toISOString().slice(0, 10);
+const compactDay = d => d.replace(/-/g, '');
+
 test('open then close a shift writes the same rows as the old dialogs', () => {
   const env = freshEnv();
   const { token } = login(env, 'ayu', 'pw-ayu');
-  const at = '2026-11-01T23:30:05.123Z'; // 07:30:05 on 02/11 in Bali/Singapore time
+  const at = D0 + 'T23:30:05.123Z'; // 07:30:05 on 02/11 in Bali/Singapore time
   const o = op('shift_open', { shiftId: 'S1', cashCounted: 1387000 }, at);
   let r = env.call({ action: 'push', token, deviceId: 'dev1', ops: [o] });
   assert.ok(r.ok, JSON.stringify(r));
@@ -73,7 +78,7 @@ test('open then close a shift writes the same rows as the old dialogs', () => {
   assert.strictEqual(openRow[7], '[S1]', 'shift id tag in the comment');
   assert.ok(openRow[0] instanceof Date);
 
-  const c = op('shift_close', { shiftId: 'S1', cashCounted: 1000000, cashout: 400000, expectedCash: 1387000, comment: 'ok' }, '2026-11-02T07:00:00.000Z');
+  const c = op('shift_close', { shiftId: 'S1', cashCounted: 1000000, cashout: 400000, expectedCash: 1387000, comment: 'ok' }, D1 + 'T07:00:00.000Z');
   r = env.call({ action: 'push', token, deviceId: 'dev1', ops: [c] });
   assert.strictEqual(r.results[0].status, 'applied', JSON.stringify(r));
   assert.strictEqual(r.results[0].difference, 13000);
@@ -86,7 +91,7 @@ test('open then close a shift writes the same rows as the old dialogs', () => {
   assert.strictEqual(manual[2][1], 'Cash-out');
   assert.strictEqual(manual[2][11], 400000);
   assert.strictEqual(manual[2][14], 'r1@x');
-  assert.strictEqual(manual[2][16], '20261102150000000');
+  assert.strictEqual(manual[2][16], compactDay(D1) + '150000000');
   assert.strictEqual(manual[2][5], '', 'formula column untouched only where we wrote blanks');
 });
 
@@ -215,10 +220,10 @@ test('dates follow the spreadsheet timezone, and the state version only grows', 
   const env = freshEnv();
   env.ctx.SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone = () => 'Asia/Jakarta';
   const { token } = login(env, 'ayu', 'pw-ayu');
-  const r = env.call({ action: 'push', token, ops: [op('shift_open', { shiftId: 'J', cashCounted: 1 }, '2026-11-01T17:30:00.000Z')] });
+  const r = env.call({ action: 'push', token, ops: [op('shift_open', { shiftId: 'J', cashCounted: 1 }, D0 + 'T17:30:00.000Z')] });
   const row = env.book['Cashouts&Cor'].data.at(-1);
   assert.strictEqual(row[1], '00:30:00', '17:30 UTC = 00:30 in Jakarta');
-  assert.strictEqual(row[0].toISOString(), '2026-11-01T17:00:00.000Z', 'midnight 2 Nov in Jakarta');
+  assert.strictEqual(row[0].toISOString(), D0 + 'T17:00:00.000Z', 'midnight of the next day in Jakarta');
   const r2 = env.call({ action: 'push', token, ops: [op('shift_close', { shiftId: 'J', cashCounted: 1, expectedCash: 1 })] });
   assert.ok(r2.shift.v > r.shift.v);
   assert.strictEqual(r2.shift.recent.J, 'Closed');
