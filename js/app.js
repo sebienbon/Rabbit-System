@@ -223,7 +223,7 @@ async function renderShift() {
   const wt = await workTabs({ ui, user: ui.user, shift });
   const gear = await gearView();
   const ga = gearAlerts(gear);
-  const tabs = [['sell', 'Sell'], ['checkin', 'Check-in'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['partners', 'Partners', wt.counts.partners], ['card', 'Card'], ['bar', 'Bar cash-out'], /* TEMPORARY (bar cash-out) */ ['gear', 'Gear', ga.diffs + ga.late], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
+  const tabs = [['checkin', 'Check-in'], ['sell', 'Sell'], ['bills', 'Guest bills', wt.counts.bills], ['expenses', 'Expenses', wt.counts.expenses], ['cash', 'Cash box', wt.counts.cash], ['partners', 'Partners', wt.counts.partners], ['card', 'Card'], ['bar', 'Bar cash-out'], /* TEMPORARY (bar cash-out) */ ['gear', 'Gear', ga.diffs + ga.late], ['shift', 'This shift', wt.counts.shift], ['close', 'Close shift']];
   html += `<section class="card shift">
     <div class="shifthead">
       <h2>${mine ? 'Your shift' : `${esc(shift.userName && shift.userName !== shift.user ? shift.userName : nameOf(shift.user))}'s shift`}</h2>

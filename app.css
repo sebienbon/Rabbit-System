@@ -532,6 +532,7 @@ ul.plain li .num { margin-left: auto; }
 }
 
 /* ---------- Rabbit Tree logos (img/, from the Control Board sheet) ---------- */
+.tabs [data-tab="checkin"]  { --logo: url(img/qrcode.svg); }
 .tabs [data-tab="sell"]     { --logo: url(img/sales.webp); }
 .tabs [data-tab="bills"]    { --logo: url(img/unpaid.webp); }
 .tabs [data-tab="expenses"] { --logo: url(img/expenses.webp); }
@@ -548,6 +549,7 @@ ul.plain li .num { margin-left: auto; }
 
 /* the section's logo next to the shift title */
 .card.shift { --hero: url(img/sales.webp); }
+.card.shift:has([data-tab="checkin"][aria-selected="true"])  { --hero: url(img/qrcode.svg); }
 .card.shift:has([data-tab="bills"][aria-selected="true"])    { --hero: url(img/unpaid.webp); }
 .card.shift:has([data-tab="expenses"][aria-selected="true"]) { --hero: url(img/expenses.webp); }
 .card.shift:has([data-tab="cash"][aria-selected="true"])     { --hero: url(img/phantom.webp); }
