@@ -2768,6 +2768,10 @@ var UIAPI = (function () {
       if (!fn && /^ci_/.test(String(body.action)) && typeof CHECKIN !== 'undefined') {
         fn = function (b) { return CHECKIN.handle(b, { user: function (t) { return publicUser_(auth_(session_(t))); } }); };
       }
+      // Housekeeping (33.Housekeeping.gs, owner 24/11): In / Out at the desk (session token), feed for the Staff App (its own key).
+      if (!fn && /^hk_/.test(String(body.action)) && typeof HK !== 'undefined') {
+        fn = function (b) { return HK.handle(b, { user: function (t) { return publicUser_(auth_(session_(t))); } }); };
+      }
       if (!fn) throw apiError_('unknown_action', 'Unknown action');
       var out = fn(body);
       out.ok = true;

@@ -84,6 +84,7 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
   const drive = { files: {}, folders: {} };
   const mails = [];
   const mailFail = { next: false };
+  const cache = new Map(), fetches = [];
   const triggers = [];
   const ss = {
     getSpreadsheetTimeZone: () => tz,
@@ -149,13 +150,17 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
         getFileById: id => api(file(id)),
       };
     })(),
+    // Cache: kept in memory, never expires in a test (clear with env.cache.clear()).
+    CacheService: { getScriptCache: () => ({ get: k => (cache.has(k) ? cache.get(k) : null), put: (k, v) => { cache.set(k, v); } }) },
+    UrlFetchApp: { fetch: (url, opt) => { fetches.push({ url, opt }); return { getResponseCode: () => 200, getContentText: () => '{"ok":true}' }; } },
     MailApp: { sendEmail(m) { if (mailFail.next) { mailFail.next = false; throw new Error('Mail service failed (simulated)'); } mails.push(m); } },
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(__dirname + '/../server/30.UI_api.gs', 'utf8'), ctx);
   vm.runInContext(fs.readFileSync(__dirname + '/../server/32.Checkin.gs', 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(__dirname + '/../server/33.Housekeeping.gs', 'utf8'), ctx);
   const call = body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text);
-  return { ctx, book, props, call, mails, mailFail, triggers, drive };
+  return { ctx, book, props, call, mails, mailFail, triggers, drive, cache, fetches };
 }
 
 module.exports = { makeEnv };

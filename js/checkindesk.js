@@ -8,6 +8,7 @@ import { tokenFor } from './auth.js';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const day = ymd => { if (!ymd) return ''; const [y, m, d] = ymd.split('-'); return `${d}/${m}`; };
 const POLL_MS = 2000;
+const hm = iso => { if (!iso) return ''; const t = new Date(iso); return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
 const STATUS = { filling: ['Filling in…', 'wait'], ready: ['Ready', 'ok'] };
 
 export const checkinBusy = ui => ui.tab === 'checkin' && !!(ui.ci && (ui.ci.sid || ui.ci.walkin));
@@ -26,6 +27,22 @@ export async function renderCheckin(root, d) {
     call('ci_arrivals').then(r => { ci.arrivals = r.arrivals; ci.today = r.today; }).catch(e => { ci.error = e.message; })
       .finally(() => { ci.loading = false; rerender(); });
   }
+  // Guests in and out (owner 24/11): In = arrived, Out = left (bags out). The housekeeping app reads it to
+  // know which room to clean first. Asked with the arrivals; a failure here never hides the check-in list.
+  if (!ci.hk && !ci.hkLoading && !ci.hkError) {
+    ci.hkLoading = true;
+    call('hk_day').then(r => { ci.hk = r; }).catch(e => { ci.hkError = e.code === 'unknown_action' ? 'off' : e.message; })
+      .finally(() => { ci.hkLoading = false; rerender(); });
+  }
+  const hk = ci.hk || { arrivals: [], departures: [] };
+  const inOf = id => hk.arrivals.find(a => a.bookId === id);
+  const where = x => `${esc(x.room)}${x.unit ? ' · ' + esc(x.unit) : ''}`;
+  const markBtn = (x, type) => x.at
+    ? `<span class="cidone">✓ ${type === 'in' ? 'In' : 'Out'} ${hm(x.at)}${x.by ? ' · ' + esc(x.by) : ''}</span> <button type="button" class="tool" data-hk="${type}" data-id="${esc(x.bookId)}" data-undo="1">Undo</button>`
+    : `<button type="button" class="${type === 'out' ? 'primary' : 'ghost'} small" data-hk="${type}" data-id="${esc(x.bookId)}">${type === 'in' ? 'In' : 'Out'}</button>`;
+  const leaving = hk.departures.length ? `<h3>Leaving today <span class="muted">· tap Out when the guest has left with the bags${hk.late ? ' · check-out time has passed' : ''}</span></h3>
+    <ul class="cilist">${hk.departures.map(x => `<li><div><b>${esc(x.name)}</b> <span class="muted">· ${where(x)} · ${x.guests} guest${x.guests > 1 ? 's' : ''}</span></div>
+      <span>${markBtn(x, 'out')}</span></li>`).join('')}</ul>` : (ci.hk ? '<p class="muted">Nobody leaves today in Beds24.</p>' : '');
   const list = ci.arrivals || [];
   const groups = [['Arriving today', list.filter(b => b.arrival === ci.today)], ['Arrived yesterday', list.filter(b => b.arrival < ci.today)],
     ['Arriving tomorrow', list.filter(b => b.arrival > ci.today)]].filter(g => g[1].length);
@@ -36,18 +53,27 @@ export async function renderCheckin(root, d) {
     <p class="muted">Pick the booking, then ask the guest to scan the QR code on the desk <b>with the phone camera</b>. Each person of the booking scans with their own phone.</p>
     ${ci.loading ? '<p class="muted">Loading the arrivals from Beds24…</p>' : ''}
     ${ci.error ? `<p class="cinote">${esc(ci.error)} <button type="button" class="ghost small" id="ciRetry">Try again</button></p>` : ''}
+    ${ci.hkError && ci.hkError !== 'off' ? `<p class="cinote">In / Out: ${esc(ci.hkError)}</p>` : ''}
+    ${leaving}
     ${groups.map(([title, g]) => `<h3>${title}</h3><ul class="cilist">${g.map(b => `<li>
       <div><b>${esc(b.name)}</b> <span class="muted">· ${esc(b.room)} · ${day(b.arrival)} → ${day(b.departure)} · ${b.guests} guest${b.guests > 1 ? 's' : ''}${b.channel ? ' · ' + esc(b.channel) : ''}</span>
         ${b.noShow ? ' <span class="badge noshow">No-show</span>' : ''}
         ${b.checkedIn.length ? `<div class="cidone">✓ Checked in: ${b.checkedIn.map(esc).join(', ')}</div>` : ''}</div>
-      <button type="button" class="${b.checkedIn.length ? 'ghost' : 'primary'} small" data-book="${esc(b.bookId)}">${b.checkedIn.length ? 'Add a person' : 'Start check-in'}</button>
+      <span>${inOf(b.bookId) ? markBtn(inOf(b.bookId), 'in') + ' ' : ''}<button type="button" class="${b.checkedIn.length ? 'ghost' : 'primary'} small" data-book="${esc(b.bookId)}">${b.checkedIn.length ? 'Add a person' : 'Start check-in'}</button></span>
     </li>`).join('')}</ul>`).join('')}
     ${ci.arrivals && !list.length ? '<p class="muted">No arrivals in Beds24 from yesterday to tomorrow.</p>' : ''}
     <h3>Guest without a booking in the list</h3>
     <form id="ciWalk" class="ciwalk"><input type="text" id="ciName" placeholder="Guest name" maxlength="60" value="${esc(ci.walkin)}">
       <button type="submit" class="ghost">Start check-in</button></form>
   </section>`;
-  root.querySelector('#ciReload').onclick = () => { ci.arrivals = null; ci.error = ''; rerender(); };
+  root.querySelector('#ciReload').onclick = () => { ci.arrivals = null; ci.error = ''; ci.hk = null; ci.hkError = ''; rerender(); };
+  root.querySelectorAll('[data-hk]').forEach(b => b.onclick = async () => {
+    const type = b.dataset.hk, undo = !!b.dataset.undo;
+    if (undo && !confirm(`Undo this ${type === 'in' ? 'In' : 'Out'}?`)) return;
+    b.disabled = true;
+    try { ci.hk = await call('hk_mark', { bookId: b.dataset.id, type, undo }); ci.hkError = ''; } catch (e) { ci.hkError = e.message; }
+    rerender();
+  });
   const rt = root.querySelector('#ciRetry'); if (rt) rt.onclick = () => { ci.error = ''; rerender(); };
   const start = async (body, btn) => {
     if (btn) btn.disabled = true;

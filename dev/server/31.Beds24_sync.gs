@@ -483,7 +483,44 @@ var B24 = (function () {
         guests: (Number(b.numAdult) || 0) + (Number(b.numChild) || 0) || 1, noShow: noShow_(b), channel: channel_(b) || '' };
     }).sort(function (a, b) { return a.arrival < b.arrival ? -1 : a.arrival > b.arrival ? 1 : a.name < b.name ? -1 : 1; });
   }
-  return { run: run, setup: setup, arrivals: arrivals };
+  /**
+   * Housekeeping (owner 24/11, 33.Housekeeping.gs): everybody concerned by `day` (yyyy-MM-dd) in ONE call:
+   * arriving that day, leaving that day (last night = the day before) and staying (arrived before, sleeping
+   * that night). Not cancelled, not no-show. `unitId` = the bed / room number inside the Beds24 room type.
+   */
+  function house(day) {
+    var d0 = Utilities.parseDate(day, TS_TZ, 'yyyy-MM-dd'), prev = ymd_(addDays_(d0, -1));
+    var list = call_('getBookings', { arrivalFrom: compact_(ymd_(addDays_(d0, -60))), arrivalTo: compact_(day), departureFrom: compact_(prev), includeInvoice: true });
+    return (Array.isArray(list) ? list : []).filter(function (b) {
+      return !cancelled_(b) && !noShow_(b) && String(b.firstNight) <= day && String(b.lastNight) >= prev;
+    }).map(function (b) {
+      var first = String(b.firstNight), last = String(b.lastNight);
+      return { bookId: String(b.bookId), name: guestName0_(b), room: roomName_(b), roomId: String(b.roomId || ''), unitId: String(b.unitId || ''),
+        kind: first === day ? 'arrival' : last === prev ? 'departure' : 'stay', arrival: first,
+        departure: ymd_(addDays_(Utilities.parseDate(last, TS_TZ, 'yyyy-MM-dd'), 1)),
+        guests: (Number(b.numAdult) || 0) + (Number(b.numChild) || 0) || 1 };
+    });
+  }
+  /**
+   * The names of the beds / rooms inside each Beds24 room type, when Beds24 gives them (getProperty,
+   * roomTypes[].unitNames, one name per line): [{roomId, room, unitId, unit}]. Empty when it does not.
+   */
+  function units() {
+    var out = [];
+    try {
+      var r = call_('getProperty', {});
+      var props = (r && r.getProperty) || [];
+      (Array.isArray(props) ? props : [props]).forEach(function (p) {
+        (p.roomTypes || []).forEach(function (t) {
+          String(t.unitNames || '').split(/\r?\n|\|/).forEach(function (n, i) {
+            if (String(n).trim()) out.push({ roomId: String(t.roomId || ''), room: String(t.name || ''), unitId: String(i + 1), unit: String(n).trim() });
+          });
+        });
+      });
+    } catch (e) { /* no unit names: the Units tab is filled by hand */ }
+    return out;
+  }
+  return { run: run, setup: setup, arrivals: arrivals, house: house, units: units };
 })();
 
 function B24_run() { return B24.run(); }
