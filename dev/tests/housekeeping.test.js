@@ -106,6 +106,14 @@ test('a booking that extends a stay in the same room is a stay, not an Out and a
   assert.deepStrictEqual([f.departures.length, f.stays.map(s => [s.bookId, s.since]), f.arrivals.map(a => a.bookId)], [0, [['10', AGO3]], ['12']]);
 });
 
+test('a booking with no room charge (monthly guest) gets its room name from Data activities', () => {
+  const env = env0([{ bookId: '20', name: 'Monthly Guest', room: 'Room', roomId: '460597', unitId: '2', kind: 'stay', arrival: AGO3, departure: TOMORROW, guests: 1 }]);
+  const row = new Array(21).fill(''); row[18] = 'White House'; row[20] = '460597';
+  env.ctx.SpreadsheetApp.getActiveSpreadsheet().insertSheet('Data activities').appendRow(['h']).appendRow(row);
+  const f = env.call({ action: 'hk_moves', key: env.props.HK_FEED_KEY, date: TODAY });
+  assert.deepStrictEqual(f.stays.map(x => [x.room, x.unit]), [['White House', '2']]);
+});
+
 test('checked in on the phone counts as In', () => {
   const env = env0(HOUSE);
   const row = new Array(17).fill('');

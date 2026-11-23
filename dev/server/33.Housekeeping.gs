@@ -90,10 +90,19 @@ var HK = (function () {
     });
     return map;
   }
+  /** Beds24 room id → room type name (Data activities, columns S and U). For a booking with no room charge (a monthly guest at price 0). */
+  function roomNames_() {
+    var names = {}, s = ss_().getSheetByName('Data activities');
+    if (s && s.getLastRow() >= 2) s.getRange(2, 19, s.getLastRow() - 1, 3).getValues().forEach(function (r) {
+      if (String(r[2]).trim() && String(r[0]).trim()) names[String(r[2]).trim()] = String(r[0]).trim();
+    });
+    return names;
+  }
   /** room = what the Staff App should look for; unit = the bed number (dorms), for the people only. */
   function place_(b, map) {
     var staff = map[b.roomId + '|' + b.unitId] || map[b.roomId + '|'] || '';
-    return staff ? { room: b.room, unit: staff } : { room: b.room, unit: b.unitId || '' };
+    var room = b.room && b.room !== 'Room' ? b.room : ((map._names = map._names || roomNames_())[b.roomId] || b.room || 'Room');
+    return staff ? { room: room, unit: staff } : { room: room, unit: b.unitId || '' };
   }
 
   // ---------- In / Out ----------
@@ -126,7 +135,7 @@ var HK = (function () {
     var now = new Date(), today = ymd_(now), list = house_(today, !!body.fresh), marks = marks_(today), map = unitMap_();
     function line(b, type) {
       var p = place_(b, map), k = marks[b.bookId + '|' + type];
-      return { bookId: b.bookId, name: b.name, room: b.room, unit: p.unit, guests: b.guests, arrival: b.arrival, departure: b.departure,
+      return { bookId: b.bookId, name: b.name, room: p.room, unit: p.unit, guests: b.guests, arrival: b.arrival, departure: b.departure,
         at: k ? iso_(k.at) : null, by: k ? k.by : '' };
     }
     var byName = function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; };
@@ -148,7 +157,7 @@ var HK = (function () {
       var has = !!marks_(today)[id + '|' + type];
       if (!!body.undo === has) { // not already in the asked state
         var p = place_(b, unitMap_());
-        sheet_(MOVES, MOVES_HEAD).appendRow([now, (body.undo ? 'undo_' : '') + type, id, safe_(b.name), safe_(b.room), safe_(String(p.unit)), safe_(u.name || u.username), today]);
+        sheet_(MOVES, MOVES_HEAD).appendRow([now, (body.undo ? 'undo_' : '') + type, id, safe_(b.name), safe_(p.room), safe_(String(p.unit)), safe_(u.name || u.username), today]);
         SpreadsheetApp.flush();
       }
     } finally { l.releaseLock(); }
