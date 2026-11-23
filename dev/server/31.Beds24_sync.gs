@@ -512,8 +512,8 @@ var B24 = (function () {
       var props = (r && r.getProperty) || [];
       (Array.isArray(props) ? props : [props]).forEach(function (p) {
         (p.roomTypes || []).forEach(function (t) {
-          String(t.unitNames || '').split(/\r?\n|\|/).forEach(function (n, i) {
-            if (String(n).trim()) out.push({ roomId: String(t.roomId || ''), room: String(t.name || ''), unitId: String(i + 1), unit: String(n).trim() });
+          String(t.unitNames || '').split(/[\r\n|]+/).filter(function (n) { return String(n).trim(); }).forEach(function (n, i) { // unit id = place in the list
+            out.push({ roomId: String(t.roomId || ''), room: String(t.name || ''), unitId: String(i + 1), unit: String(n).trim() });
           });
         });
       });

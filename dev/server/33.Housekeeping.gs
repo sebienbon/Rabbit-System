@@ -210,8 +210,16 @@ var HK = (function () {
     if (a === 'hk_mark') return mark(body, ui);
     throw err_('unknown_action', 'Unknown action');
   }
-  return { handle: handle, setup: setup };
+  /** From the editor: what the Staff App would get for today, without the guests' names (rooms and statuses only). */
+  function check() {
+    var f = feed_(ymd_(new Date()));
+    function rooms(list) { return list.map(function (x) { return x.room + (x.unit ? ' / ' + x.unit : '') + (x.status ? ' [' + x.status + ']' : ''); }).join(' · ') || 'none'; }
+    return 'Arrivals ' + f.arrivals.length + ': ' + rooms(f.arrivals) + '\nDepartures ' + f.departures.length + ': ' + rooms(f.departures) + '\nStays ' + f.stays.length + ': ' + rooms(f.stays);
+  }
+  return { handle: handle, setup: setup, check: check };
 })();
 
 /** Run once from the editor: tabs CI_Moves and Units, and the key the Staff App reads with (HK_FEED_KEY). */
 function HK_setup() { var r = HK.setup(); Logger.log(r); return r; }
+/** Run from the editor to see today's rooms as the Staff App gets them (no names). */
+function HK_check() { var r = HK.check(); Logger.log(r); return r; }
