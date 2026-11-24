@@ -9,7 +9,7 @@
  *   {action:"hk_mark", token, bookId, type:"in"|"out", undo}  → the receptionist taps In (guest arrived) or Out
  *                                                    (guest left, bags out); one line in the tab CI_Moves, never changed
  * Staff App (its own key, Script Property HK_FEED_KEY; read only, no personal data: no passport, email, phone, amounts):
- *   {action:"hk_moves", key, date, due:[bookId…]}  → {date, arrivals, departures, stays}; `due` = the stays whose room
+ *   {action:"hk_moves", key, date, due:[bookId…]}  → {date, arrivals, departures, stays, units}; `due` = the stays whose room
  *                                                    is due for its every-3-days cleaning (the Staff App knows the cleanings)
  * Cleaning of a guest who stays (owner 24/11): the guest is asked first, by WhatsApp from the hostel's own WhatsApp
  * (a wa.me link, no paid API). The message carries a personal link to clean.html (two buttons Yes / No).
@@ -111,6 +111,25 @@ var HK = (function () {
     var staff = map[b.roomId + '|' + b.unitId] || map[b.roomId + '|'] || '';
     var room = b.room && b.room !== 'Room' ? b.room : ((map._names = map._names || roomNames_())[b.roomId] || b.room || 'Room');
     return staff ? { room: room, unit: staff } : { room: room, unit: b.unitId || '' };
+  }
+
+  /**
+   * Every bed / room Beds24 sells, as the Staff App should see it (owner 24/11: extra beds are added in
+   * Beds24, so the Staff App counts the beds of a room from here, not from a fixed list). Kept 1 hour.
+   */
+  function rooms_(map) {
+    var cache = typeof CacheService !== 'undefined' ? CacheService.getScriptCache() : null, hit = cache && cache.get('HK_UNITS');
+    var units = null;
+    try { units = hit ? JSON.parse(hit) : null; } catch (e) { units = null; }
+    if (!units) {
+      units = [];
+      try { if (typeof B24 !== 'undefined' && B24.units) units = B24.units(); } catch (e) { units = []; }
+      if (cache && units.length) try { cache.put('HK_UNITS', JSON.stringify(units), 3600); } catch (e) { /* too big: read again next time */ }
+    }
+    return units.map(function (u) {
+      var p = place_({ roomId: u.roomId, unitId: u.unitId, room: u.room }, map);
+      return { room: p.room, unit: String(map[u.roomId + '|' + u.unitId] || u.unit || '') }; // the Staff App room typed in Units, else Beds24's name
+    });
   }
 
   // ---------- In / Out ----------
@@ -259,7 +278,7 @@ var HK = (function () {
   function feed_(dayStr) {
     var now = new Date(), today = ymd_(now), list = house_(dayStr, false), marks = marks_(dayStr), map = unitMap_();
     var late = dayStr < today || (dayStr === today && hour_(now) >= CHECKOUT_HOUR);
-    var out = { date: dayStr, generatedAt: now.toISOString(), checkoutHour: CHECKOUT_HOUR, arrivals: [], departures: [], stays: [] };
+    var out = { date: dayStr, generatedAt: now.toISOString(), checkoutHour: CHECKOUT_HOUR, arrivals: [], departures: [], stays: [], units: rooms_(map) };
     list.forEach(function (b) {
       var p = place_(b, map), x = { bookId: b.bookId, guest: b.name, room: p.room, unit: String(p.unit), guests: b.guests };
       if (b.kind === 'arrival') {
@@ -326,7 +345,10 @@ var HK = (function () {
   function check() {
     var f = feed_(ymd_(new Date()));
     function rooms(list) { return list.map(function (x) { return x.room + (x.unit ? ' / ' + x.unit : '') + (x.status ? ' [' + x.status + ']' : ''); }).join(' · ') || 'none'; }
-    return 'Arrivals ' + f.arrivals.length + ': ' + rooms(f.arrivals) + '\nDepartures ' + f.departures.length + ': ' + rooms(f.departures) + '\nStays ' + f.stays.length + ': ' + rooms(f.stays);
+    var beds = {};
+    (f.units || []).forEach(function (u) { beds[u.room] = (beds[u.room] || 0) + 1; });
+    return 'Arrivals ' + f.arrivals.length + ': ' + rooms(f.arrivals) + '\nDepartures ' + f.departures.length + ': ' + rooms(f.departures) + '\nStays ' + f.stays.length + ': ' + rooms(f.stays) +
+      '\nUnits from Beds24 ' + (f.units || []).length + ': ' + (Object.keys(beds).map(function (k) { return k + ' ' + beds[k]; }).join(' · ') || 'none');
   }
   return { handle: handle, setup: setup, check: check };
 })();

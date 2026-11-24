@@ -201,3 +201,11 @@ test('the receptionist notes the answer himself (the guest answered in WhatsApp)
   assert.strictEqual(env.call({ action: 'hk_clean', token, bookId: '30', answer: 'maybe' }).error, 'bad_payload');
   assert.strictEqual(env.call({ action: 'hk_clean', token: login(env, 'gear1'), bookId: '30', answer: 'yes' }).error, 'forbidden');
 });
+
+test('the feed lists every unit Beds24 sells (owner 24/11: extra beds are added in Beds24)', () => {
+  const env = env0(HOUSE);
+  const f = env.call({ action: 'hk_moves', key: env.props.HK_FEED_KEY, date: TODAY });
+  assert.ok(Array.isArray(f.units), 'units in the feed');
+  assert.deepStrictEqual(f.units.map(u => u.room + '/' + u.unit), ['Double inside building/Passion', 'Double inside building/Bamboo 1', 'Bola Bola/1']);
+  assert.ok(/Units from Beds24 3/.test(env.ctx.HK_check()), 'HK_check counts them');
+});

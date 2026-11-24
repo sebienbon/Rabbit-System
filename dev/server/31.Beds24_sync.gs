@@ -502,8 +502,9 @@ var B24 = (function () {
     });
   }
   /**
-   * The names of the beds / rooms inside each Beds24 room type, when Beds24 gives them (getProperty,
-   * roomTypes[].unitNames, one name per line): [{roomId, room, unitId, unit}]. Empty when it does not.
+   * The beds / rooms inside each Beds24 room type (getProperty): [{roomId, room, unitId, unit}], one per unit.
+   * Names from roomTypes[].unitNames (one per line) when Beds24 gives them; since 24/11 (owner: extra beds are
+   * added in Beds24) a type has at least `qty` units, the ones with no name get their number.
    */
   function units() {
     var out = [];
@@ -512,9 +513,11 @@ var B24 = (function () {
       var props = (r && r.getProperty) || [];
       (Array.isArray(props) ? props : [props]).forEach(function (p) {
         (p.roomTypes || []).forEach(function (t) {
-          String(t.unitNames || '').split(/[\r\n|]+/).filter(function (n) { return String(n).trim(); }).forEach(function (n, i) { // unit id = place in the list
-            out.push({ roomId: String(t.roomId || ''), room: String(t.name || ''), unitId: String(i + 1), unit: String(n).trim() });
-          });
+          var names = String(t.unitNames || '').split(/[\r\n|]+/).filter(function (n) { return String(n).trim(); });
+          var qty = Math.max(names.length, Math.min(200, Number(t.qty) || 0));
+          for (var i = 0; i < qty; i++) { // unit id = place in the list
+            out.push({ roomId: String(t.roomId || ''), room: String(t.name || ''), unitId: String(i + 1), unit: names[i] ? String(names[i]).trim() : String(i + 1) });
+          }
         });
       });
     } catch (e) { /* no unit names: the Units tab is filled by hand */ }
