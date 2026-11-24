@@ -8,8 +8,16 @@
  *   {action:"hk_day", token, fresh}                → {today, hour, arrivals:[…], departures:[…]} with who is In / Out
  *   {action:"hk_mark", token, bookId, type:"in"|"out", undo}  → the receptionist taps In (guest arrived) or Out
  *                                                    (guest left, bags out); one line in the tab CI_Moves, never changed
- * Staff App (its own key, Script Property HK_FEED_KEY; read only, no personal data: no passport, email, amounts):
- *   {action:"hk_moves", key, date}                 → {date, arrivals, departures, stays}
+ * Staff App (its own key, Script Property HK_FEED_KEY; read only, no personal data: no passport, email, phone, amounts):
+ *   {action:"hk_moves", key, date, due:[bookId…]}  → {date, arrivals, departures, stays}; `due` = the stays whose room
+ *                                                    is due for its every-3-days cleaning (the Staff App knows the cleanings)
+ * Cleaning of a guest who stays (owner 24/11): the guest is asked first, by WhatsApp from the hostel's own WhatsApp
+ * (a wa.me link, no paid API). The message carries a personal link to clean.html (two buttons Yes / No).
+ *   {action:"hk_ask", token, bookId}               → {t, day}: the proof that goes in the guest's link (nothing written)
+ *   {action:"hk_asked", token, bookId}             → the receptionist says the message left (line "ask" in CI_Moves)
+ *   {action:"hk_clean", token, bookId, answer}     → the receptionist notes the answer himself: yes | no | none (undo)
+ *   {action:"hk_answer", b, d, t, answer}          → the guest's own tap (no login: t proves the link; today only)
+ * The answer goes to the Staff App in stays[].cleaning: yes | no | asked.
  *
  * A departure nobody tapped is given as "checked_out_auto" from 14:00 (check-out hour; nothing is written).
  * A guest checked in on the phone (32.Checkin.gs) counts as In. A booking that only extends a stay in the same
@@ -106,6 +114,31 @@ var HK = (function () {
   }
 
   // ---------- In / Out ----------
+  // ---------- cleaning of a stay: ask the guest ----------
+  function signed_(bookId, day) {
+    var secret = props_().getProperty('HK_FEED_KEY') || '';
+    if (!secret) throw err_('not_set_up', 'Run HK_setup first');
+    return Utilities.computeHmacSha256Signature(String(bookId) + '|' + day, secret).slice(0, 12)
+      .map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+  }
+  function due_(day) {
+    var c = typeof CacheService !== 'undefined' ? CacheService.getScriptCache().get('HK_DUE_' + day) : null;
+    try { return c ? JSON.parse(c) : null; } catch (e) { return null; }
+  }
+  /** The WhatsApp numbers known for a booking: the people checked in on their phone first, then Beds24's. */
+  function phones_(b, guests) {
+    var out = [], seen = {};
+    function add(label, raw) {
+      var d = typeof CHECKIN !== 'undefined' && CHECKIN.phone ? CHECKIN.phone(raw) : String(raw || '').replace(/[^0-9]/g, '');
+      if (d && !seen[d]) { seen[d] = true; out.push({ label: label, number: d }); }
+    }
+    var mine = guests.filter(function (r) { return String(r[2]) === b.bookId && String(r[12]) === 'checked in'; });
+    mine.sort(function (x, y) { return (String(y[4]) === String(y[3])) - (String(x[4]) === String(x[3])); }); // the booking's own name first
+    mine.forEach(function (r) { add(String(r[4]), '+' + String(r[17] || '').replace(/[^0-9]/g, '')); });
+    add(b.name + ' (Beds24)', b.phone);
+    return out;
+  }
+
   /** Last tap per booking and type for a day: {"<bookId>|in": {at, by}}; an undo removes it. */
   function marks_(day) {
     var m = {};
@@ -115,9 +148,12 @@ var HK = (function () {
       if (type === 'in' || type === 'out') m[id + '|' + type] = { at: r[0] instanceof Date ? r[0] : new Date(r[0]), by: String(r[6]) };
       else if (type === 'undo_in') delete m[id + '|in'];
       else if (type === 'undo_out') delete m[id + '|out'];
+      else if (type === 'ask') m[id + '|ask'] = { at: r[0] instanceof Date ? r[0] : new Date(r[0]), by: String(r[6]) };
+      else if (type === 'clean_yes' || type === 'clean_no') m[id + '|clean'] = { answer: type === 'clean_yes' ? 'yes' : 'no', at: r[0] instanceof Date ? r[0] : new Date(r[0]), by: String(r[6]) };
+      else if (type === 'clean_undo') delete m[id + '|clean'];
     });
     // Checked in on the phone (32.Checkin.gs) = In.
-    values_(GUESTS, 15).forEach(function (r) {
+    values_(GUESTS, 18).forEach(function (r) {
       var id = String(r[2]);
       if (!id || String(r[12]) !== 'checked in' || m[id + '|in']) return;
       var at = r[14] instanceof Date ? r[14] : null;
@@ -139,7 +175,14 @@ var HK = (function () {
         at: k ? iso_(k.at) : null, by: k ? k.by : '' };
     }
     var byName = function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; };
-    return { today: today, checkoutHour: CHECKOUT_HOUR, late: hour_(now) >= CHECKOUT_HOUR,
+    var due = due_(today), guests = values_(GUESTS, 18);
+    var stays = list.filter(function (b) { return b.kind === 'stay'; }).map(function (b) {
+      var p = place_(b, map), a = marks[b.bookId + '|ask'], c = marks[b.bookId + '|clean'];
+      return { bookId: b.bookId, name: b.name, room: p.room, unit: p.unit, since: b.arrival, departure: b.departure,
+        due: due ? due.indexOf(b.bookId) >= 0 : null, askedAt: a ? iso_(a.at) : null, answer: c ? c.answer : null,
+        answerBy: c ? c.by : '', answerAt: c ? iso_(c.at) : null, phones: phones_(b, guests) };
+    }).sort(function (a, b) { return (b.due === true) - (a.due === true) || byName(a, b); });
+    return { today: today, checkoutHour: CHECKOUT_HOUR, late: hour_(now) >= CHECKOUT_HOUR, stays: stays, dueKnown: !!due,
       arrivals: list.filter(function (b) { return b.kind === 'arrival'; }).map(function (b) { return line(b, 'in'); }).sort(byName),
       departures: list.filter(function (b) { return b.kind === 'departure'; }).map(function (b) { return line(b, 'out'); }).sort(byName) };
   }
@@ -165,6 +208,53 @@ var HK = (function () {
     return day({ token: body.token }, ui);
   }
 
+  function stay_(id, today) {
+    function find(fresh) { return house_(today, fresh).filter(function (x) { return x.bookId === id && x.kind === 'stay'; })[0]; }
+    return find(false) || find(true);
+  }
+  function note_(type, b, by, today) {
+    var l = LockService.getScriptLock();
+    if (!l.tryLock(15000)) throw err_('busy', 'The server is busy, try again');
+    try {
+      var p = place_(b, unitMap_());
+      sheet_(MOVES, MOVES_HEAD).appendRow([new Date(), type, b.bookId, safe_(b.name), safe_(p.room), safe_(String(p.unit)), safe_(by), today]);
+      SpreadsheetApp.flush();
+    } finally { l.releaseLock(); }
+    push_(today);
+  }
+  function ask(body, ui) {
+    deskUser_(body, ui);
+    var today = ymd_(new Date()), b = stay_(text_(body.bookId, 20), today);
+    if (!b) throw err_('not_found', 'This guest is not staying today any more: refresh');
+    return { t: signed_(b.bookId, today), day: today, bookId: b.bookId };
+  }
+  function asked(body, ui) {
+    var u = deskUser_(body, ui), today = ymd_(new Date()), b = stay_(text_(body.bookId, 20), today);
+    if (!b) throw err_('not_found', 'This guest is not staying today any more: refresh');
+    note_('ask', b, u.name || u.username, today);
+    return day({ token: body.token }, ui);
+  }
+  function clean(body, ui) {
+    var u = deskUser_(body, ui), today = ymd_(new Date()), b = stay_(text_(body.bookId, 20), today);
+    var a = String(body.answer);
+    if (!b) throw err_('not_found', 'This guest is not staying today any more: refresh');
+    if (a !== 'yes' && a !== 'no' && a !== 'none') throw err_('bad_payload', 'Yes or no');
+    note_(a === 'none' ? 'clean_undo' : 'clean_' + a, b, u.name || u.username, today);
+    return day({ token: body.token }, ui);
+  }
+  /** The guest's own page (clean.html): what the link is about, and the answer when one is tapped. */
+  function answer(body) {
+    var today = ymd_(new Date()), id = text_(body.b, 20), d = String(body.d || '');
+    if (!id || !sameKey_(String(body.t || ''), signed_(id, d))) { Utilities.sleep(500); throw err_('bad_link', 'This link is not valid'); }
+    if (d !== today) throw err_('expired', 'This link was for another day');
+    var b = stay_(id, today);
+    if (!b) throw err_('expired', 'This link is no longer valid');
+    var a = String(body.answer || '');
+    if (a === 'yes' || a === 'no') note_('clean_' + a, b, 'guest', today);
+    var c = marks_(today)[id + '|clean'], p = place_(b, unitMap_());
+    return { first: String(b.name).split(' ')[0], room: /[a-z]/i.test(String(p.unit)) ? String(p.unit) : p.room, answer: c ? c.answer : null };
+  }
+
   // ---------- Staff App ----------
   function feed_(dayStr) {
     var now = new Date(), today = ymd_(now), list = house_(dayStr, false), marks = marks_(dayStr), map = unitMap_();
@@ -180,7 +270,11 @@ var HK = (function () {
         var o = marks[b.bookId + '|out'];
         x.status = o ? 'checked_out' : late ? 'checked_out_auto' : 'expected'; x.checkedOutAt = o ? iso_(o.at) : null;
         out.departures.push(x);
-      } else { x.since = b.arrival; out.stays.push(x); }
+      } else {
+        var c = marks[b.bookId + '|clean'];
+        x.since = b.arrival; x.cleaning = c ? c.answer : marks[b.bookId + '|ask'] ? 'asked' : null;
+        out.stays.push(x);
+      }
     });
     return out;
   }
@@ -188,7 +282,12 @@ var HK = (function () {
     var secret = props_().getProperty('HK_FEED_KEY');
     if (!secret || !sameKey_(body.key, secret)) { Utilities.sleep(500); throw err_('forbidden', 'Wrong key'); }
     var d = String(body.date || '').slice(0, 10);
-    return feed_(/^\d{4}-\d\d-\d\d$/.test(d) ? d : ymd_(new Date()));
+    d = /^\d{4}-\d\d-\d\d$/.test(d) ? d : ymd_(new Date());
+    // the Staff App says which stays are due for a cleaning: the desk shows them first (kept 6 h, renewed at each read)
+    if (Array.isArray(body.due) && typeof CacheService !== 'undefined') {
+      try { CacheService.getScriptCache().put('HK_DUE_' + d, JSON.stringify(body.due.slice(0, 200).map(function (x) { return String(x).slice(0, 20); })), 21600); } catch (e) { /* no cache: no badge */ }
+    }
+    return feed_(d);
   }
   /** After an In / Out: tell the Staff App at once (it also reads by itself every 2 minutes). Never blocks the desk. */
   function push_(dayStr) {
@@ -217,6 +316,10 @@ var HK = (function () {
     if (a === 'hk_moves') return moves(body);
     if (a === 'hk_day') return day(body, ui);
     if (a === 'hk_mark') return mark(body, ui);
+    if (a === 'hk_ask') return ask(body, ui);
+    if (a === 'hk_asked') return asked(body, ui);
+    if (a === 'hk_clean') return clean(body, ui);
+    if (a === 'hk_answer') return answer(body);
     throw err_('unknown_action', 'Unknown action');
   }
   /** From the editor: what the Staff App would get for today, without the guests' names (rooms and statuses only). */

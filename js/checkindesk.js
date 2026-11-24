@@ -34,12 +34,37 @@ export async function renderCheckin(root, d) {
     call('hk_day').then(r => { ci.hk = r; }).catch(e => { ci.hkError = e.code === 'unknown_action' ? 'off' : e.message; })
       .finally(() => { ci.hkLoading = false; rerender(); });
   }
+  // a guest's answer (clean.html) shows by itself: looked for every minute while this list is on screen
+  if (!ci.hkTimer) ci.hkTimer = setInterval(() => {
+    if (ci.sid || !document.querySelector('.ci') || document.hidden || ci.waSent || /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName || '')) return;
+    call('hk_day').then(r => { const k = JSON.stringify(r); if (k !== JSON.stringify(ci.hk)) { ci.hk = r; rerender(); } }).catch(() => {});
+  }, 60000);
   const hk = ci.hk || { arrivals: [], departures: [] };
   const inOf = id => hk.arrivals.find(a => a.bookId === id);
   const where = x => `${esc(x.room)}${x.unit ? ' · ' + esc(x.unit) : ''}`;
   const markBtn = (x, type) => x.at
     ? `<span class="cidone">✓ ${type === 'in' ? 'In' : 'Out'} ${hm(x.at)}${x.by ? ' · ' + esc(x.by) : ''}</span> <button type="button" class="tool" data-hk="${type}" data-id="${esc(x.bookId)}" data-undo="1">Undo</button>`
     : `<button type="button" class="${type === 'out' ? 'primary' : 'ghost'} small" data-hk="${type}" data-id="${esc(x.bookId)}">${type === 'in' ? 'In' : 'Out'}</button>`;
+  // Guests who stay: the cleaning of every 3 days is offered first (owner 24/11). The message leaves from the hostel's
+  // own WhatsApp (wa.me link); the guest answers on his page (clean.html) or in WhatsApp, then the desk notes it.
+  const stays = hk.stays || [];
+  const waText = (x, link) => `Hello ${x.name.split(' ')[0]}! 🐇 This is The Rabbit Tree. Today we can clean your room (${/[a-z]/i.test(String(x.unit)) ? x.unit : x.room}). Would you like that? Please tap to answer: ${link}`;
+  const stayState = x => x.answer === 'yes' ? `<span class="cidone">✓ Yes, clean${x.answerBy === 'guest' ? ' · the guest answered' : x.answerBy ? ' · ' + esc(x.answerBy) : ''}</span>`
+    : x.answer === 'no' ? `<span class="badge noshow">No cleaning${x.answerBy === 'guest' ? ' · the guest answered' : ''}</span>`
+    : x.askedAt ? `<span class="muted">Asked ${hm(x.askedAt)} · no answer yet</span>` : '';
+  const stayRow = x => `<li><div><b>${esc(x.name)}</b> <span class="muted">· ${where(x)} · until ${day(x.departure)}</span>
+      ${x.due ? ' <span class="badge">Cleaning day</span>' : ''} ${stayState(x)}
+      ${ci.waSent === x.bookId ? `<div class="cinote">Did the message leave? <button type="button" class="primary small" data-wasent="${esc(x.bookId)}">Yes, sent</button>
+        <button type="button" class="ghost small" data-wafail="1">No</button></div>` : ''}
+      ${ci.waFail === x.bookId ? `<div class="cinote">WhatsApp Web is probably not connected on this computer. Open <b>web.whatsapp.com</b>, connect it with the hostel's phone (Linked devices), then tap WhatsApp again.</div>` : ''}</div>
+    <span>${x.phones.length > 1 ? `<select class="tool" data-waphone="${esc(x.bookId)}">${x.phones.map(p => `<option value="${esc(p.number)}">${esc(p.label)}</option>`).join('')}</select> ` : ''}
+      ${x.phones.length ? `<button type="button" class="${x.due && !x.askedAt && !x.answer ? 'primary' : 'ghost'} small" data-wa="${esc(x.bookId)}">WhatsApp</button>` : `<button type="button" class="ghost small" data-wanum="${esc(x.bookId)}">+ Number</button>`}
+      ${x.answer ? `<button type="button" class="tool" data-clean="none" data-id="${esc(x.bookId)}">Undo</button>`
+        : `<button type="button" class="ghost small" data-clean="yes" data-id="${esc(x.bookId)}">Yes</button> <button type="button" class="ghost small" data-clean="no" data-id="${esc(x.bookId)}">No</button>`}</span></li>`;
+  const dueStays = stays.filter(x => x.due || x.askedAt || x.answer), otherStays = stays.filter(x => !(x.due || x.askedAt || x.answer));
+  const staying = stays.length ? `<h3>Staying · room cleaning <span class="muted">· ask the guest before the cleaning of every 3 days</span></h3>
+    ${dueStays.length ? `<ul class="cilist">${dueStays.map(stayRow).join('')}</ul>` : `<p class="muted">${hk.dueKnown ? 'No room is due for its cleaning today.' : 'The housekeeping app has not said yet which rooms are due.'}</p>`}
+    ${otherStays.length ? `<details ${ci.staysOpen ? 'open' : ''} id="ciStays"><summary class="muted">Other guests staying · ${otherStays.length}</summary><ul class="cilist">${otherStays.map(stayRow).join('')}</ul></details>` : ''}` : '';
   const leaving = hk.departures.length ? `<h3>Leaving today <span class="muted">· tap Out when the guest has left with the bags${hk.late ? ' · check-out time has passed' : ''}</span></h3>
     <ul class="cilist">${hk.departures.map(x => `<li><div><b>${esc(x.name)}</b> <span class="muted">· ${where(x)} · ${x.guests} guest${x.guests > 1 ? 's' : ''}</span></div>
       <span>${markBtn(x, 'out')}</span></li>`).join('')}</ul>` : (ci.hk ? '<p class="muted">Nobody leaves today in Beds24.</p>' : '');
@@ -55,6 +80,7 @@ export async function renderCheckin(root, d) {
     ${ci.error ? `<p class="cinote">${esc(ci.error)} <button type="button" class="ghost small" id="ciRetry">Try again</button></p>` : ''}
     ${ci.hkError && ci.hkError !== 'off' ? `<p class="cinote">In / Out: ${esc(ci.hkError)}</p>` : ''}
     ${leaving}
+    ${staying}
     ${groups.map(([title, g]) => `<h3>${title}</h3><ul class="cilist">${g.map(b => `<li>
       <div><b>${esc(b.name)}</b> <span class="muted">· ${esc(b.room)} · ${day(b.arrival)} → ${day(b.departure)} · ${b.guests} guest${b.guests > 1 ? 's' : ''}${b.channel ? ' · ' + esc(b.channel) : ''}</span>
         ${b.noShow ? ' <span class="badge noshow">No-show</span>' : ''}
@@ -67,6 +93,32 @@ export async function renderCheckin(root, d) {
       <button type="submit" class="ghost">Start check-in</button></form>
   </section>`;
   root.querySelector('#ciReload').onclick = () => { ci.arrivals = null; ci.error = ''; ci.hk = null; ci.hkError = ''; rerender(); };
+  const sd = root.querySelector('#ciStays'); if (sd) sd.ontoggle = () => { ci.staysOpen = sd.open; };
+  const hkCall = async (action, body) => { try { ci.hk = await call(action, body); ci.hkError = ''; } catch (e) { ci.hkError = e.message; } rerender(); };
+  root.querySelectorAll('[data-wa]').forEach(b => b.onclick = async () => {
+    const x = stays.find(s => s.bookId === b.dataset.wa);
+    const sel = root.querySelector(`[data-waphone="${CSS.escape(x.bookId)}"]`);
+    const number = (ci.waNum && ci.waNum[x.bookId]) || (sel ? sel.value : x.phones[0].number);
+    b.disabled = true;
+    try {
+      const a = await call('hk_ask', { bookId: x.bookId });
+      const link = new URL(`clean.html#b=${encodeURIComponent(a.bookId)}&d=${a.day}&t=${a.t}`, location.href).href;
+      window.open(`https://wa.me/${number}?text=${encodeURIComponent(waText(x, link))}`, 'rabbitwhatsapp');
+      ci.waSent = x.bookId; ci.waFail = null; ci.hkError = '';
+    } catch (e) { ci.hkError = e.message; }
+    rerender();
+  });
+  root.querySelectorAll('[data-wasent]').forEach(b => b.onclick = () => { const id = b.dataset.wasent; ci.waSent = null; hkCall('hk_asked', { bookId: id }); });
+  root.querySelectorAll('[data-wafail]').forEach(b => b.onclick = () => { ci.waFail = ci.waSent; ci.waSent = null; rerender(); });
+  root.querySelectorAll('[data-wanum]').forEach(b => b.onclick = () => {
+    const v = prompt('WhatsApp number of the guest, with the country code (for example +33 6 12 34 56 78):', '');
+    const d = String(v || '').replace(/[^0-9]/g, '').replace(/^00/, '');
+    if (d.length < 8) return;
+    const x = stays.find(s => s.bookId === b.dataset.wanum);
+    x.phones = [{ label: 'typed', number: d }]; (ci.waNum = ci.waNum || {})[x.bookId] = d;
+    rerender();
+  });
+  root.querySelectorAll('[data-clean]').forEach(b => b.onclick = () => { b.disabled = true; hkCall('hk_clean', { bookId: b.dataset.id, answer: b.dataset.clean }); });
   root.querySelectorAll('[data-hk]').forEach(b => b.onclick = async () => {
     const type = b.dataset.hk, undo = !!b.dataset.undo;
     if (undo && !confirm(`Undo this ${type === 'in' ? 'In' : 'Out'}?`)) return;
@@ -113,6 +165,7 @@ function renderSession(root, d, ci, call, rerender) {
       const [label, tone] = STATUS[p.status] || [p.status, 'wait'];
       return `<li><div class="ciphoto">${ci.photos[p.pid] ? `<a href="${ci.photos[p.pid]}" target="_blank" rel="noopener"><img src="${ci.photos[p.pid]}" alt="Passport of ${esc(p.name)}"></a>` : p.photo ? '<span class="muted">Loading the photo…</span>' : '<span class="muted">No photo yet</span>'}</div>
         <div class="ciwho"><b>${esc(p.name || 'Name not chosen yet')}</b>${p.who === 'other' && p.name ? ' <span class="muted">(another person)</span>' : ''}
+          <div>WhatsApp: <b class="num">${p.whatsapp ? '+' + esc(p.whatsapp) : '—'}</b></div>
           <div>Passport: <b class="num">${esc(p.passport || '—')}</b> <button type="button" class="tool" data-fix="${esc(p.pid)}" title="Compare with the photo and correct">Correct</button></div>
           <span class="state ${tone}">${label}</span>
           <button type="button" class="ghost small" data-remove="${esc(p.pid)}">Remove</button></div></li>`;

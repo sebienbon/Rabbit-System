@@ -219,3 +219,19 @@ test('menu pass: a checked-in phone gets a one-time pass, the POS account checks
   const p3 = env.call({ action: 'ci_menu_pass', key: key('a') });
   assert.strictEqual(env.call({ action: 'ci_menu_verify', token: pos, pass: p3.pass }).device, v.device);
 });
+
+test('WhatsApp number (owner 24/11): asked on the phone, kept with the country code, never needed to finish', () => {
+  const env = env0(), token = login(env, 'ayu');
+  const sid = openFor(env, token);
+  const k = key('a');
+  env.call({ action: 'ci_hello', key: k });
+  let r = env.call({ action: 'ci_set', key: k, sid, who: 'booking', passport: 'AB123456', whatsapp: '+33 6 12 34 56 78' });
+  assert.strictEqual(r.me.whatsapp, '33612345678');
+  r = env.call({ action: 'ci_set', key: k, sid, whatsapp: '0812-3456-789' });
+  assert.strictEqual(r.me.whatsapp, '628123456789', 'a number starting with 0 is an Indonesian one');
+  r = env.call({ action: 'ci_set', key: k, sid, whatsapp: '0033 6 12 34 56 78' });
+  assert.strictEqual(r.me.whatsapp, '33612345678');
+  r = env.call({ action: 'ci_set', key: k, sid, whatsapp: 'no' });
+  assert.strictEqual(r.me.whatsapp, '', 'not a number: nothing kept');
+  assert.strictEqual(env.book['CI_Guests'].data[0][17], 'WhatsApp');
+});

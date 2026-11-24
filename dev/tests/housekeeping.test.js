@@ -134,3 +134,70 @@ test('a Staff App room typed in Units wins; each In / Out is pushed when HK_PUSH
   const sent = JSON.parse(env.fetches[0].opt.payload);
   assert.deepStrictEqual([env.fetches[0].url, sent.key, sent.arrivals[0].status], ['https://staff.example/api/hooks/moves', 'k1', 'checked_in']);
 });
+
+// ---------- cleaning of a stay: the guest is asked first (owner 24/11) ----------
+const STAYS = [
+  { bookId: '30', name: 'Cleo Stay', room: 'Tree House', roomId: '460595', unitId: '3', kind: 'stay', arrival: AGO3, departure: TOMORROW, guests: 1, phone: '0812 3456 789' },
+  { bookId: '31', name: 'Dan Couple', room: 'Double inside building', roomId: '353330', unitId: '1', kind: 'stay', arrival: AGO3, departure: TOMORROW, guests: 2, phone: '' },
+];
+function checkedIn(env, bookId, bookName, name, wa) {
+  const row = new Array(18).fill('');
+  row[2] = bookId; row[3] = bookName; row[4] = name; row[12] = 'checked in'; row[13] = 'Ayu'; row[14] = new Date(Date.now() - 3 * 86400000); row[17] = wa;
+  env.book['CI_Guests'].appendRow(row);
+}
+
+test('stays at the desk: due ones first (said by the Staff App), WhatsApp numbers from the check-in then Beds24', () => {
+  const env = env0(STAYS), token = login(env, 'ayu'), key = env.props.HK_FEED_KEY;
+  checkedIn(env, '31', 'Dan Couple', 'Eva Partner', '+33611111111');
+  checkedIn(env, '31', 'Dan Couple', 'Dan Couple', '+33622222222');
+  let d = env.call({ action: 'hk_day', token });
+  assert.deepStrictEqual([d.dueKnown, d.stays.map(s => s.due)], [false, [null, null]], 'Staff App not linked: nobody marked');
+  env.call({ action: 'hk_moves', key, date: TODAY, due: ['31'] });
+  d = env.call({ action: 'hk_day', token });
+  assert.deepStrictEqual(d.stays.map(s => [s.name, s.due]), [['Dan Couple', true], ['Cleo Stay', false]]);
+  assert.deepStrictEqual(d.stays[0].phones.map(p => p.number), ['33622222222', '33611111111'], 'the booking\'s own name first');
+  assert.deepStrictEqual(d.stays[1].phones, [{ label: 'Cleo Stay (Beds24)', number: '628123456789' }], 'a local number gets the country code');
+  const f = env.call({ action: 'hk_moves', key, date: TODAY });
+  assert.doesNotMatch(JSON.stringify(f), /3361|6281|phone/, 'no phone number ever goes to the Staff App');
+});
+
+test('asking by WhatsApp: the link is proved, the guest answers on his page, the Staff App gets yes / no', () => {
+  const env = env0(STAYS), token = login(env, 'ayu'), key = env.props.HK_FEED_KEY;
+  const a = env.call({ action: 'hk_ask', token, bookId: '31' });
+  assert.ok(a.ok && /^[a-f0-9]{24}$/.test(a.t) && a.day === TODAY, JSON.stringify(a));
+  assert.strictEqual(env.book['CI_Moves'].data.length, 1, 'making the link writes nothing');
+  let f = env.call({ action: 'hk_moves', key, date: TODAY });
+  assert.strictEqual(f.stays.find(s => s.bookId === '31').cleaning, null);
+  let d = env.call({ action: 'hk_asked', token, bookId: '31' });
+  const dan = x => x.stays.find(s => s.bookId === '31');
+  assert.ok(dan(d).askedAt && dan(d).answer === null);
+  f = env.call({ action: 'hk_moves', key, date: TODAY });
+  assert.strictEqual(f.stays.find(s => s.bookId === '31').cleaning, 'asked');
+  // the guest opens the link: sees his room, then taps
+  let g = env.call({ action: 'hk_answer', b: '31', d: a.day, t: a.t });
+  assert.deepStrictEqual([g.ok, g.first, g.room, g.answer], [true, 'Dan', 'Passion', null]);
+  g = env.call({ action: 'hk_answer', b: '31', d: a.day, t: a.t, answer: 'no' });
+  assert.strictEqual(g.answer, 'no');
+  g = env.call({ action: 'hk_answer', b: '31', d: a.day, t: a.t, answer: 'yes' });
+  assert.strictEqual(g.answer, 'yes', 'he may change his mind: the last tap counts');
+  f = env.call({ action: 'hk_moves', key, date: TODAY });
+  assert.strictEqual(f.stays.find(s => s.bookId === '31').cleaning, 'yes');
+  d = env.call({ action: 'hk_day', token });
+  assert.deepStrictEqual([dan(d).answer, dan(d).answerBy], ['yes', 'guest']);
+  // a link cannot be guessed, reused for another booking or another day
+  assert.strictEqual(env.call({ action: 'hk_answer', b: '30', d: a.day, t: a.t, answer: 'yes' }).error, 'bad_link');
+  assert.strictEqual(env.call({ action: 'hk_answer', b: '31', d: a.day, t: 'f'.repeat(24), answer: 'yes' }).error, 'bad_link');
+  assert.strictEqual(env.call({ action: 'hk_answer', b: '31', d: YEST, t: a.t, answer: 'yes' }).error, 'bad_link');
+  assert.strictEqual(env.call({ action: 'hk_ask', token, bookId: '99' }).error, 'not_found');
+});
+
+test('the receptionist notes the answer himself (the guest answered in WhatsApp), and can undo it', () => {
+  const env = env0(STAYS), token = login(env, 'ayu'), key = env.props.HK_FEED_KEY;
+  let d = env.call({ action: 'hk_clean', token, bookId: '30', answer: 'no' });
+  assert.deepStrictEqual(d.stays.filter(s => s.bookId === '30').map(s => [s.answer, s.answerBy]), [['no', 'Ayu']]);
+  assert.strictEqual(env.call({ action: 'hk_moves', key, date: TODAY }).stays.find(s => s.bookId === '30').cleaning, 'no');
+  d = env.call({ action: 'hk_clean', token, bookId: '30', answer: 'none' });
+  assert.strictEqual(d.stays.find(s => s.bookId === '30').answer, null);
+  assert.strictEqual(env.call({ action: 'hk_clean', token, bookId: '30', answer: 'maybe' }).error, 'bad_payload');
+  assert.strictEqual(env.call({ action: 'hk_clean', token: login(env, 'gear1'), bookId: '30', answer: 'yes' }).error, 'forbidden');
+});

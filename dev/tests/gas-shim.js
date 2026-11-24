@@ -104,6 +104,7 @@ function makeEnv({ sheets = {}, tz = 'Asia/Singapore' } = {}) {
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       computeDigest: (alg, s) => Array.from(crypto.createHash(alg).update(s, 'utf8').digest()).map(b => (b > 127 ? b - 256 : b)),
+      computeHmacSha256Signature: (v, k) => Array.from(crypto.createHmac('sha256', k).update(v, 'utf8').digest()).map(b => (b > 127 ? b - 256 : b)),
       getUuid: () => crypto.randomUUID(), sleep() {}, formatDate: fmt,
       base64Decode: s => Array.from(Buffer.from(s, 'base64')), base64Encode: b => Buffer.from(b.map(x => x & 0xff)).toString('base64'),
       newBlob: (data, type, name) => ({ data, type, name, getAs(t) { return { data, type: t, name, setName(n) { this.name = n; return this; } }; } }),

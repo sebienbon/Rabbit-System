@@ -135,7 +135,7 @@ const KEY = deviceKey();
 // ---------- state ----------
 const st = {
   lang: pickLang(), mode: 'loading', session: null, me: null, guest: null,
-  who: null, name: '', passport: '', photoUrl: null, ocr: 'idle', sendingPhoto: false,
+  who: null, name: '', passport: '', whatsapp: '', photoUrl: null, ocr: 'idle', sendingPhoto: false,
   finished: false, saved: '', error: '', offline: false, closedNotice: false,
 };
 function pickLang() {
@@ -144,6 +144,12 @@ function pickLang() {
   const nav = (navigator.languages || [navigator.language || 'en']).map(l => String(l).slice(0, 2).toLowerCase());
   return [q, saved, ...nav].find(l => LANGS.includes(l)) || 'en';
 }
+// WhatsApp number (owner 24/11): asked from every guest, never needed to finish.
+Object.assign(T.en, { whatsapp: 'WhatsApp number', waHelp: 'With the country code, for example +33 6 12 34 56 78. Only used during your stay (room cleaning, messages from the reception).' });
+Object.assign(T.id, { whatsapp: 'Nomor WhatsApp', waHelp: 'Dengan kode negara, misalnya +62 812 3456 789. Hanya dipakai selama Anda menginap (pembersihan kamar, pesan dari resepsionis).' });
+Object.assign(T.fr, { whatsapp: 'Numéro WhatsApp', waHelp: "Avec l'indicatif du pays, par exemple +33 6 12 34 56 78. Utilisé seulement pendant votre séjour (ménage de la chambre, messages de la réception)." });
+Object.assign(T.es, { whatsapp: 'Número de WhatsApp', waHelp: 'Con el prefijo del país, por ejemplo +34 612 34 56 78. Solo se usa durante tu estancia (limpieza de la habitación, mensajes de la recepción).' });
+Object.assign(T.zh, { whatsapp: 'WhatsApp 号码', waHelp: '请加国家区号，例如 +86 138 0000 0000。仅在您入住期间使用（房间清洁、前台消息）。' });
 const t = (k, vars = {}) => (T[st.lang][k] ?? T.en[k]).replace(/\{(\w+)\}/g, (_, v) => vars[v] ?? '');
 const fmtDate = ymd => {
   if (!ymd) return '';
@@ -175,7 +181,7 @@ async function hello(join = false) {
     if (r.me) {
       const first = !st.me || st.me.pid !== r.me.pid;
       st.me = r.me;
-      if (first) { st.who = r.me.who === 'booking' && r.me.name ? 'booking' : r.me.name ? 'other' : null; st.name = r.me.who === 'other' ? r.me.name : ''; st.passport = r.me.passport || ''; }
+      if (first) { st.who = r.me.who === 'booking' && r.me.name ? 'booking' : r.me.name ? 'other' : null; st.name = r.me.who === 'other' ? r.me.name : ''; st.passport = r.me.passport || ''; st.whatsapp = r.me.whatsapp ? '+' + r.me.whatsapp : ''; }
     }
     if (was === 'session' && r.mode === 'none') st.closedNotice = true;
     if (r.mode === 'known' && was === 'session') st.justDone = true;
@@ -237,6 +243,10 @@ function render() {
         <div id="ocr"></div>
         <label class="field">${esc(t('number'))}<input type="text" id="passport" inputmode="text" autocapitalize="characters" spellcheck="false" maxlength="20" value="${esc(st.passport)}"></label>
       </div>
+      <div class="card"><h2>${esc(t('whatsapp'))}</h2>
+        <p class="muted" style="font-size:.95rem">${esc(t('waHelp'))}</p>
+        <input type="tel" id="whatsapp" inputmode="tel" autocomplete="tel" placeholder="+…" maxlength="24" value="${esc(st.whatsapp)}">
+      </div>
       <div id="missing"></div>
       <button type="button" class="btn go" id="done">${esc(t('done'))}</button>
       <div class="saved" id="saved"></div>
@@ -287,6 +297,8 @@ function bindForm() {
   if (nm) nm.oninput = () => { st.name = nm.value; if (st.name.trim()) save({ who: 'other', name: st.name.trim() }); };
   const pp = $('#passport');
   pp.oninput = () => { st.passport = pp.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); save({ passport: st.passport }); };
+  const wa = $('#whatsapp');
+  wa.oninput = () => { st.whatsapp = wa.value; save({ whatsapp: st.whatsapp }); };
   $('#shoot').onclick = () => $('#file').click();
   $('#file').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) takePhoto(f); };
   $('#done').onclick = finish;

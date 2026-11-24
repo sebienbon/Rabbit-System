@@ -26,9 +26,9 @@ var CHECKIN = (function () {
   var SHEET = 'CI_Guests';
   var HEAD = ['Created at', 'Session', 'Booking id', 'Booking name', 'Guest name', 'Room', 'Arrival', 'Departure',
     'Device key (SHA-256)', 'Passport number', 'Passport photo (Drive id)', 'Photo deleted after', 'Status',
-    'Checked in by', 'Checked in at', 'Language', 'Person id'];
+    'Checked in by', 'Checked in at', 'Language', 'Person id', 'WhatsApp'];
   var C = { created: 0, sid: 1, book: 2, bookName: 3, name: 4, room: 5, arr: 6, dep: 7, key: 8, pass: 9, photo: 10,
-    photoDel: 11, status: 12, by: 13, at: 14, lang: 15, pid: 16 };
+    photoDel: 11, status: 12, by: 13, at: 14, lang: 15, pid: 16, wa: 17 };
   var ST = { filling: 'filling', ready: 'ready', done: 'checked in', removed: 'removed', cancelled: 'cancelled', expired: 'expired' };
   var SESSION_MIN = 30;            // a session nobody looks at closes itself
   var PHOTO_DAYS = 60, NUMBER_DAYS = 365;
@@ -45,9 +45,14 @@ var CHECKIN = (function () {
     if (!l.tryLock(15000)) throw err_('busy', 'The server is busy, try again');
     try { return fn(); } finally { l.releaseLock(); }
   }
+  var headOk_ = false;
   function sheet_() {
     var ss = SpreadsheetApp.getActiveSpreadsheet(), s = ss.getSheetByName(SHEET);
     if (!s) { s = ss.insertSheet(SHEET); s.getRange(1, 1, 1, HEAD.length).setValues([HEAD]); s.setFrozenRows(1); }
+    else if (!headOk_) { // a column added later (WhatsApp, owner 24/11): its title is written once
+      for (var c = 0; c < HEAD.length; c++) if (String(s.getRange(1, c + 1).getValue()) !== HEAD[c] && String(s.getRange(1, c + 1).getValue()) === '') s.getRange(1, c + 1).setValue(HEAD[c]);
+      headOk_ = true;
+    }
     return s;
   }
   function rows_() {
@@ -69,6 +74,17 @@ var CHECKIN = (function () {
   }
   function lang_(v) { return LANGS.indexOf(String(v)) >= 0 ? String(v) : 'en'; }
   function passport_(v) { return String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20); }
+  /**
+   * A WhatsApp number as typed → digits with the country code ("+33 6 12…" → 33612…, "0812…" → 62812… as the hostel
+   * is in Indonesia, "0033…" → 33…). '' when it cannot be a number. Kept in the sheet as "+digits" (text).
+   */
+  function phone_(v) {
+    var s = String(v || '').trim(), d = s.replace(/[^0-9]/g, '');
+    if (/^00/.test(d)) d = d.slice(2); else if (/^0/.test(d) && s.charAt(0) !== '+') d = '62' + d.slice(1);
+    return d.length >= 8 && d.length <= 15 ? d : '';
+  }
+  function waCell_(v) { var d = phone_(v); return d ? '+' + d : ''; }
+  function waOf_(r) { return String(r[C.wa] || '').replace(/[^0-9]/g, ''); }
   function date_(v) { var s = String(v || '').slice(0, 10); return /^\d{4}-\d\d-\d\d$/.test(s) ? s : ''; }
   function addDays_(ymd, n) {
     var d = Utilities.parseDate(ymd, tz_(), 'yyyy-MM-dd');
@@ -94,7 +110,7 @@ var CHECKIN = (function () {
   }
   function person_(r) {
     return { pid: String(r[C.pid]), who: String(r[C.name]) === String(r[C.bookName]) ? 'booking' : 'other', name: String(r[C.name]),
-      passport: String(r[C.pass]), photo: String(r[C.photo]), status: String(r[C.status]), lang: String(r[C.lang]) };
+      passport: String(r[C.pass]), photo: String(r[C.photo]), status: String(r[C.status]), lang: String(r[C.lang]), whatsapp: waOf_(r) };
   }
   function mine_(sid, hash) {
     return rows_().filter(function (r) { return String(r[C.sid]) === sid && String(r[C.key]) === hash && String(r[C.status]) !== ST.removed; })[0] || null;
@@ -115,7 +131,7 @@ var CHECKIN = (function () {
           var pid = 'P' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
           var first = !rows_().some(function (x) { return String(x[C.sid]) === s.id && String(x[C.status]) !== ST.removed; });
           sheet_().appendRow([new Date(), s.id, safe_(s.bookId || ''), safe_(s.name), first ? safe_(s.name) : '', safe_(s.room || ''),
-            s.arrival || '', s.departure || '', hash, '', '', '', ST.filling, '', '', lang, pid]);
+            s.arrival || '', s.departure || '', hash, '', '', '', ST.filling, '', '', lang, pid, '']);
           r = mine_(s.id, hash);
         }
         return { mode: 'session', session: publicSession_(s), me: person_(r) };
@@ -144,12 +160,14 @@ var CHECKIN = (function () {
       if (body.who === 'booking') ch[C.name] = safe_(g.s.name);
       else if (body.who === 'other') ch[C.name] = safe_(text_(body.name, 60));
       if (body.passport !== undefined) ch[C.pass] = passport_(body.passport);
+      if (body.whatsapp !== undefined) ch[C.wa] = safe_(waCell_(body.whatsapp)); // owner 24/11: asked from everybody, never blocks the check-in
       if (body.lang) ch[C.lang] = lang_(body.lang);
       var name = ch[C.name] !== undefined ? ch[C.name] : g.r[C.name];
       var pass = ch[C.pass] !== undefined ? ch[C.pass] : g.r[C.pass];
       ch[C.status] = name && pass && g.r[C.photo] ? ST.ready : ST.filling;
       setCells_(g.r.rowNo, ch);
       g.r[C.name] = name; g.r[C.pass] = pass; g.r[C.status] = ch[C.status];
+      if (ch[C.wa] !== undefined) g.r[C.wa] = ch[C.wa];
       return { me: person_(g.r) };
     });
   }
@@ -293,6 +311,7 @@ var CHECKIN = (function () {
       var ch = {};
       if (body.passport !== undefined) ch[C.pass] = passport_(body.passport);
       if (body.name !== undefined) { var n = text_(body.name, 60); if (!n) throw err_('bad_payload', 'Type a name'); ch[C.name] = safe_(n); }
+      if (body.whatsapp !== undefined) ch[C.wa] = safe_(waCell_(body.whatsapp));
       var name = ch[C.name] !== undefined ? ch[C.name] : r[C.name], pass = ch[C.pass] !== undefined ? ch[C.pass] : r[C.pass];
       ch[C.status] = name && pass && r[C.photo] ? ST.ready : ST.filling;
       setCells_(r.rowNo, ch);
@@ -307,7 +326,7 @@ var CHECKIN = (function () {
       if (String(r[C.sid]) !== s.id || String(r[C.status]) === ST.done) return;
       if (String(r[C.status]) === ST.removed) { if (r[C.key]) setCells_(r.rowNo, (function () { var c = {}; c[C.key] = ''; return c; })()); return; }
       trash_(r[C.photo]);
-      var ch = {}; ch[C.status] = ST.cancelled; ch[C.photo] = ''; ch[C.pass] = ''; ch[C.key] = '';
+      var ch = {}; ch[C.status] = ST.cancelled; ch[C.photo] = ''; ch[C.pass] = ''; ch[C.key] = ''; ch[C.wa] = '';
       setCells_(r.rowNo, ch);
     });
   }
@@ -355,13 +374,14 @@ var CHECKIN = (function () {
         var st = String(r[C.status]), ch = {};
         if (st === ST.filling || st === ST.ready) { // a session left open and never finished
           var s = getSession_(String(r[C.sid]));
-          if (!liveSession_(s)) { trash_(r[C.photo]); ch[C.status] = ST.expired; ch[C.photo] = ''; ch[C.pass] = ''; ch[C.key] = ''; n.expired++; }
+          if (!liveSession_(s)) { trash_(r[C.photo]); ch[C.status] = ST.expired; ch[C.photo] = ''; ch[C.pass] = ''; ch[C.key] = ''; ch[C.wa] = ''; n.expired++; }
         }
         if (st === ST.done) {
           var del = cellYmd_(r[C.photoDel]);
           if (r[C.photo] && del && del <= today) { trash_(r[C.photo]); ch[C.photo] = ''; n.photos++; }
           var dep = cellYmd_(r[C.dep]);
           if (r[C.pass] && dep && ymd_(addDays_(dep, NUMBER_DAYS)) <= today) { ch[C.pass] = ''; n.numbers++; }
+          if (r[C.wa] && dep && ymd_(addDays_(dep, PHOTO_DAYS)) <= today) ch[C.wa] = ''; // the WhatsApp number: 60 days after departure, like the photo
         }
         if (Object.keys(ch).length) setCells_(r.rowNo, ch);
       });
@@ -391,7 +411,7 @@ var CHECKIN = (function () {
     if (DESK[a]) return DESK[a](body, ui);
     throw err_('unknown_action', 'Unknown action');
   }
-  return { handle: handle, cleanup: cleanup, setup: setup, actions: Object.keys(GUEST).concat(Object.keys(DESK)) };
+  return { handle: handle, cleanup: cleanup, setup: setup, phone: phone_, actions: Object.keys(GUEST).concat(Object.keys(DESK)) };
 })();
 
 /** Run once from the editor: tab CI_Guests, the Drive folder for passport photos, the daily cleanup. */

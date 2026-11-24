@@ -498,7 +498,7 @@ var B24 = (function () {
       return { bookId: String(b.bookId), name: guestName0_(b), room: roomName_(b), roomId: String(b.roomId || ''), unitId: String(b.unitId || ''),
         kind: first === day ? 'arrival' : last === prev ? 'departure' : 'stay', arrival: first,
         departure: ymd_(addDays_(Utilities.parseDate(last, TS_TZ, 'yyyy-MM-dd'), 1)),
-        guests: (Number(b.numAdult) || 0) + (Number(b.numChild) || 0) || 1 };
+        guests: (Number(b.numAdult) || 0) + (Number(b.numChild) || 0) || 1, phone: String(b.guestMobile || b.guestPhone || '') }; // phone: for the desk only
     });
   }
   /**

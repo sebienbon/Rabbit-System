@@ -38,8 +38,8 @@
     .choice { display: flex; gap: 10px; align-items: center; padding: 12px; border: 2px solid var(--line); border-radius: 14px; margin: 8px 0; cursor: pointer; }
     .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); }
     .choice input { width: 22px; height: 22px; accent-color: var(--accent); margin: 0; }
-    input[type=text] { width: 100%; font: inherit; font-size: 18px; padding: 12px; border: 2px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); }
-    input[type=text]:focus { outline: none; border-color: var(--accent); }
+    input[type=text], input[type=tel] { width: 100%; font: inherit; font-size: 18px; padding: 12px; border: 2px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); }
+    input[type=text]:focus, input[type=tel]:focus { outline: none; border-color: var(--accent); }
     input.check { border-color: #19C3B1; background: #F2FDFB; }
     label.field { display: block; margin-top: 12px; font-weight: 800; font-size: .95rem; }
     label.field input { margin-top: 6px; letter-spacing: .06em; text-transform: uppercase; }
