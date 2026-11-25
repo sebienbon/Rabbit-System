@@ -310,7 +310,8 @@ var HK = (function () {
   }
   /** After an In / Out: tell the Staff App at once (it also reads by itself every 2 minutes). Never blocks the desk. */
   function push_(dayStr) {
-    var url = props_().getProperty('HK_PUSH_URL'), key = props_().getProperty('HK_PUSH_KEY');
+    // 26/11: no HK_PUSH_KEY = sign with HK_FEED_KEY (the Staff App accepts the key it reads with)
+    var url = props_().getProperty('HK_PUSH_URL'), key = props_().getProperty('HK_PUSH_KEY') || props_().getProperty('HK_FEED_KEY');
     if (!url || !key || typeof UrlFetchApp === 'undefined') return;
     try {
       var body = feed_(dayStr); body.key = key;
