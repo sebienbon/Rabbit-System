@@ -45,7 +45,16 @@ var UIAPI = (function () {
     protect: 'Protect'
   };
   var USERS_HEADER = ['Username', 'Display name', 'Role (staff/manager/admin)', 'Author email',
-    'Set new password here', 'Password hash', 'Salt', 'Active'];
+    'Set new password here', 'Password hash', 'Salt', 'Active',
+    // One list of people for every app (owner 28/11): reception, gear, bar POS, staff app. Columns I-M.
+    'Password (readable, not manager / admin)', 'Set new PIN here', 'PIN hash', 'PIN salt', 'PIN (readable, not manager / admin)'];
+  var UCOL = { plain: 5, hash: 6, salt: 7, active: 8, readable: 9, pinNew: 10, pinHash: 11, pinSalt: 12, pinReadable: 13 };
+  // Roles written in column C. `gear` = housekeeping (gear app; cashier in the POS, staff in the staff app),
+  // `maintenance` = staff app only. Neither uses the reception desk.
+  var ROLES = ['staff', 'manager', 'admin', 'gear', 'maintenance'];
+  function deskless_(role) { return role === 'gear' || role === 'maintenance'; }
+  // The owner reads the staff's codes in the sheet (they lose them); never a manager's or an admin's.
+  function readableRole_(role) { return role !== 'manager' && role !== 'admin'; }
   var LOG_HEADER = ['Received at', 'Op ID', 'Device', 'User', 'Type', 'Shift ID', 'Happened at', 'Result', 'Detail', 'Payload'];
   var SHIFTS_HEADER = ['Shift ID', 'User', 'Author email', 'Opened at', 'Opening cash counted', 'Opening difference',
     'Closed at', 'Closing cash counted', 'Cashout', 'Closing difference', 'Status', 'Closed by', 'Comment'];
@@ -172,33 +181,65 @@ var UIAPI = (function () {
   }
 
   // ---------- users, devices & sessions ----------
-  /** Hashes any plain password typed in column E, then clears it. Call under the lock. */
+  function roleOf_(v) { var r = String(v).trim().toLowerCase(); return ROLES.indexOf(r) >= 0 ? r : 'staff'; }
+  /** Columns I-M on a sheet made before 28/11: added on the right, with their titles. Call under the lock. */
+  function ensureUserColumns_(s) {
+    var n = USERS_HEADER.length;
+    if (s.getMaxColumns && s.getMaxColumns() < n) s.insertColumnsAfter(s.getMaxColumns(), n - s.getMaxColumns());
+    var head = s.getRange(1, 1, 1, n).getValues()[0];
+    for (var c = UCOL.readable; c <= n; c++) if (String(head[c - 1]) === '') s.getRange(1, c).setValue(USERS_HEADER[c - 1]);
+    if (String(head[UCOL.pinHash - 1]) === '') s.getRange(1, UCOL.pinHash, s.getMaxRows ? s.getMaxRows() : 1000, 2).setNumberFormat('@');
+  }
+  /**
+   * Hashes any plain password typed in column E, then clears it; the same for a PIN typed in column J (4 digits, one
+   * person per PIN: the PIN alone says who it is on the bar till). For everybody but managers and admins the code is
+   * also kept readable (columns I and M), owner 28/11. A refused PIN stays in J behind "! " with the reason.
+   * Call under the lock.
+   */
   function hashPendingPasswords_() {
     var s = ss_().getSheetByName(SHEETS.users);
     if (!s || s.getLastRow() < 2) return;
-    var n = s.getLastRow() - 1;
-    var plain = s.getRange(2, 5, n, 1).getValues();
-    plain.forEach(function (r, i) {
-      if (String(r[0]) === '') return;
-      var row = i + 2;
-      var salt = Utilities.getUuid().replace(/-/g, '');
-      var active = s.getRange(row, 8).getValue();
-      s.getRange(row, 5, 1, 4).setValues([['', hashPassword_(String(r[0]), salt), salt, active === '' ? true : active]]);
+    ensureUserColumns_(s);
+    var n = s.getLastRow() - 1, W = USERS_HEADER.length;
+    var rows = s.getRange(2, 1, n, W).getValues();
+    rows.forEach(function (r, i) {
+      var row = i + 2, readable = readableRole_(roleOf_(r[2]));
+      if (String(r[UCOL.plain - 1]) !== '') {
+        var salt = Utilities.getUuid().replace(/-/g, '');
+        var active = r[UCOL.active - 1];
+        r[UCOL.hash - 1] = hashPassword_(String(r[UCOL.plain - 1]), salt); r[UCOL.salt - 1] = salt;
+        s.getRange(row, UCOL.plain, 1, 4).setValues([['', r[UCOL.hash - 1], salt, active === '' ? true : active]]);
+        s.getRange(row, UCOL.readable).setValue(readable ? String(r[UCOL.plain - 1]) : '');
+      }
+      var pin = String(r[UCOL.pinNew - 1]).trim();
+      if (pin !== '' && pin.charAt(0) !== '!') {
+        var why = '';
+        if (!/^\d{4}$/.test(pin)) why = '4 digits';
+        else rows.forEach(function (o, k) {
+          if (k !== i && String(o[0]).trim() !== '' && String(o[UCOL.pinHash - 1]) !== '' &&
+              hashPassword_(pin, String(o[UCOL.pinSalt - 1])) === String(o[UCOL.pinHash - 1])) why = 'already used by someone else';
+        });
+        if (why) { s.getRange(row, UCOL.pinNew).setValue('! ' + why + ': ' + pin); return; }
+        var psalt = Utilities.getUuid().replace(/-/g, '');
+        r[UCOL.pinHash - 1] = hashPassword_(pin, psalt); r[UCOL.pinSalt - 1] = psalt;
+        s.getRange(row, UCOL.pinNew, 1, 4).setValues([['', r[UCOL.pinHash - 1], psalt, readable ? pin : '']]);
+      }
     });
   }
   function readUsers_() {
     var s = sheet_(SHEETS.users);
     if (s.getLastRow() < 2) return [];
-    return s.getRange(2, 1, s.getLastRow() - 1, USERS_HEADER.length).getValues()
+    var width = Math.min(USERS_HEADER.length, s.getMaxColumns ? s.getMaxColumns() : USERS_HEADER.length);
+    return s.getRange(2, 1, s.getLastRow() - 1, width).getValues()
       .filter(function (r) { return String(r[0]).trim() !== ''; })
       .map(function (r) {
-        var role = String(r[2]).trim().toLowerCase();
         return {
           username: String(r[0]).trim().toLowerCase(),
           name: String(r[1]).trim() || String(r[0]).trim(),
-          role: (role === 'manager' || role === 'admin' || role === 'gear') ? role : 'staff',
+          role: roleOf_(r[2]),
           author: String(r[3]).trim(),
           hash: String(r[5]), salt: String(r[6]),
+          pinHash: String(r[UCOL.pinHash - 1] === undefined ? '' : r[UCOL.pinHash - 1]), pinSalt: String(r[UCOL.pinSalt - 1] === undefined ? '' : r[UCOL.pinSalt - 1]),
           active: r[7] === true || String(r[7]).toUpperCase() === 'TRUE'
         };
       });
@@ -219,6 +260,7 @@ var UIAPI = (function () {
       Utilities.sleep(800); // slow down guessing
       throw apiError_('bad_login', 'Wrong username or password');
     }
+    if (user.role === 'maintenance') throw apiError_('wrong_app', 'Maintenance accounts use the staff app');
     var props = PropertiesService.getScriptProperties();
     var deviceId = String(body.deviceId || '');
     var registered = false, newSecret = null;
@@ -285,7 +327,7 @@ var UIAPI = (function () {
     }
     var u = findUser_(by);
     if (!u || !u.active) throw apiError_('forbidden', 'Unknown or disabled user ' + by);
-    if (u.role === 'gear') throw apiError_('forbidden', 'Gear accounts do not use the reception');
+    if (deskless_(u.role)) throw apiError_('forbidden', 'Gear and maintenance accounts do not use the reception');
     // Checked only by the computer itself: never more than staff rights.
     var asStaff = {}; Object.keys(u).forEach(function (k) { asStaff[k] = u[k]; }); asStaff.role = 'staff';
     return { user: asStaff, via: 'offline-login on device' };
@@ -296,7 +338,7 @@ var UIAPI = (function () {
   var POS_PASS_MS = 120000;
   function pos_pass(body) {
     var me = auth_(session_(body.token));
-    if (me.role === 'gear') throw apiError_('forbidden', 'Gear accounts do not use the bar POS');
+    if (deskless_(me.role)) throw apiError_('forbidden', 'Gear and maintenance accounts do not use the bar POS from here');
     var props = PropertiesService.getScriptProperties(), all = props.getProperties(), now = Date.now();
     Object.keys(all).forEach(function (k) { if (k.indexOf('UIPOS_') === 0) { try { if (JSON.parse(all[k]).exp < now) props.deleteProperty(k); } catch (e) { props.deleteProperty(k); } } });
     var code = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
@@ -323,7 +365,7 @@ var UIAPI = (function () {
     if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account can ask a pass');
     var u = findUser_(body.username);
     if (!u || !u.active) throw apiError_('bad_user', 'Unknown or disabled Rabbit-System user ' + String(body.username || ''));
-    if (u.role === 'gear') throw apiError_('forbidden', 'Gear accounts use the gear app');
+    if (deskless_(u.role)) throw apiError_('forbidden', 'Gear accounts use the gear app, maintenance the staff app');
     if (u.username === caller.username) throw apiError_('forbidden', 'The POS account itself does not use the reception');
     var props = PropertiesService.getScriptProperties(), all = props.getProperties(), now = Date.now();
     Object.keys(all).forEach(function (k) { if (k.indexOf('UIRS_') === 0) { try { if (JSON.parse(all[k]).exp < now) props.deleteProperty(k); } catch (e) { props.deleteProperty(k); } } });
@@ -338,7 +380,7 @@ var UIAPI = (function () {
     var p = raw ? JSON.parse(raw) : null;
     if (!p || p.exp < Date.now()) { Utilities.sleep(800); throw apiError_('bad_pass', 'This link expired: open the reception again from the POS, or log in with your password'); }
     var user = findUser_(p.u);
-    if (!user || !user.active || user.role === 'gear') throw apiError_('bad_pass', 'User disabled');
+    if (!user || !user.active || deskless_(user.role)) throw apiError_('bad_pass', 'User disabled');
     var deviceId = String(body.deviceId || ''), devs = devices_();
     var registered = !!(deviceId && body.deviceSecret && devs[deviceId] && devs[deviceId].secret === String(body.deviceSecret)); // never registers a device
     purgeSessions_(props);
@@ -406,11 +448,31 @@ var UIAPI = (function () {
     return { guests: readGuests_(), bar: readBarCashouts_(), me: caller.author || caller.username };
   }
   // One staff list (owner 09/11): the POS (its session, account bar-pos) reads who works here; no passwords leave.
+  // Owner 28/11: one PIN per person for the till and the staff app, set in this sheet: its hash goes with the list
+  // (v 2; an older POS ignores it).
   function pos_staff(body) {
     var caller = auth_(session_(body.token));
     if (caller.role !== 'manager' && caller.role !== 'admin') throw apiError_('forbidden', 'Only the POS account can read the staff');
-    return { staff: readUsers_().filter(function (u) { return u.username !== caller.username; }).map(function (u) {
-      return { username: u.username, name: u.name, role: u.role, active: u.active };
+    withLock_(hashPendingPasswords_);
+    return { v: 2, rounds: HASH_ROUNDS, staff: readUsers_().filter(function (u) { return u.username !== caller.username; }).map(function (u) {
+      return { username: u.username, name: u.name, role: u.role, active: u.active, pinHash: u.pinHash, pinSalt: u.pinSalt };
+    }) };
+  }
+  // One list of people for every app (owner 28/11). The staff app (a server, no session here) copies the whole list
+  // with the hashes, so it checks passwords and PINs by itself, also when this sheet is out of reach. Its key: Script
+  // Property DIRECTORY_KEY, else the one it already reads the housekeeping feed with (HK_FEED_KEY).
+  function directory(body) {
+    var props = PropertiesService.getScriptProperties();
+    var secret = String(props.getProperty('DIRECTORY_KEY') || props.getProperty('HK_FEED_KEY') || '');
+    var given = String(body.key || '');
+    if (!secret || given.length !== secret.length || hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, given, Utilities.Charset.UTF_8)) !==
+        hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, secret, Utilities.Charset.UTF_8))) {
+      Utilities.sleep(800);
+      throw apiError_('forbidden', 'Wrong key');
+    }
+    withLock_(hashPendingPasswords_);
+    return { v: 1, rounds: HASH_ROUNDS, at: new Date().toISOString(), users: readUsers_().map(function (u) {
+      return { username: u.username, name: u.name, role: u.role, active: u.active, hash: u.hash, salt: u.salt, pinHash: u.pinHash, pinSalt: u.pinSalt };
     }) };
   }
   function publicUser_(u) { return { username: u.username, name: u.name, role: u.role, author: u.author || u.username }; }
@@ -2763,7 +2825,7 @@ var UIAPI = (function () {
     soldCache_ = null; gearDirty_ = false;
     try {
       var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, pos_lines: pos_lines, pos_address: pos_address, pos_guests: pos_guests }[body.action];
+      var fn = { login: login, pull: pull, push: push, logout: logout, ping: ping, pos_pass: pos_pass, pos_verify: pos_verify, rs_pass: rs_pass, pass_login: pass_login, pos_staff: pos_staff, directory: directory, pos_lines: pos_lines, pos_address: pos_address, pos_guests: pos_guests }[body.action];
       // Check-in on the guest's phone (32.Checkin.gs): guest calls carry a device key, desk calls a session token.
       if (!fn && /^ci_/.test(String(body.action)) && typeof CHECKIN !== 'undefined') {
         fn = function (b) { return CHECKIN.handle(b, { user: function (t) { return publicUser_(auth_(session_(t))); } }); };
